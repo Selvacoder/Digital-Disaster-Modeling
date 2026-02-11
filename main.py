@@ -1,4 +1,6 @@
-from subprocess import check_output
+from subprocess import check_output, CalledProcessError
+import shutil
+import sys
 from FloorplanToBlenderLib import (
     IO,
     config,
@@ -14,7 +16,7 @@ import os
 
 
 
-def create_blender_project(data_paths):
+def create_blender_project(data_paths, blender_install_path, target_folder, program_path, blender_script_path):
     if not os.path.exists("." + target_folder):
         os.makedirs("." + target_folder)
 
@@ -24,38 +26,66 @@ def create_blender_project(data_paths):
         IO.get_next_target_base_name(target_base, target_path) + const.BASE_FORMAT
     )
 
-    # Create blender project
-    check_output(
-        [
-            blender_install_path,
-            "-noaudio",  # this is a dockerfile ubuntu hax fix
-            "--background",
-            "--python",
-            blender_script_path,
-            program_path,  # Send this as parameter to script
-            target_path,
-        ]
-        + data_paths
-    )
 
-    outformat = config.get(
-        const.SYSTEM_CONFIG_FILE_NAME, "SYSTEM", const.STR_OUT_FORMAT
-    ).replace('"', "")
-    # Transform .blend project to another format!
-    if outformat != ".blend":
+    # Validate blender path
+    if not os.path.isfile(blender_install_path):
+        print(f"ERROR: Blender not found at {blender_install_path}")
+        # Try to find it in PATH
+        fallback = shutil.which("blender")
+        if fallback:
+            print(f"Found blender in PATH: {fallback}")
+            blender_install_path = fallback
+        else:
+            print("Could not find blender automatically.")
+            print("Please ensure Blender is installed and the path is correct in Configs/system.ini")
+            exit(1)
+
+    # Create blender project
+    try:
         check_output(
             [
                 blender_install_path,
                 "-noaudio",  # this is a dockerfile ubuntu hax fix
                 "--background",
                 "--python",
-                "./Blender/blender_export_any.py",
-                "." + target_path,
-                outformat,
-                target_base + outformat,
+                blender_script_path,
+                program_path,  # Send this as parameter to script
+                target_path,
             ]
+            + data_paths
         )
-        print("Object created at:" + program_path + target_base + outformat)
+    except FileNotFoundError:
+        print(f"ERROR: The blender executable was not found at {blender_install_path}")
+        exit(1)
+    except CalledProcessError as e:
+        print(f"ERROR: Blender process failed with return code {e.returncode}")
+        print(f"Output: {e.output.decode() if e.output else 'No output'}")
+        exit(1)
+    except Exception as e:
+        print(f"ERROR: An unexpected error occurred while running Blender: {e}")
+        exit(1)
+
+    outformat = config.get(
+        const.SYSTEM_CONFIG_FILE_NAME, "SYSTEM", const.STR_OUT_FORMAT
+    ).replace('"', "")
+    # Transform .blend project to another format!
+    if outformat != ".blend":
+        try:
+            check_output(
+                [
+                    blender_install_path,
+                    "-noaudio",  # this is a dockerfile ubuntu hax fix
+                    "--background",
+                    "--python",
+                    "./Blender/blender_export_any.py",
+                    "." + target_path,
+                    outformat,
+                    target_base + outformat,
+                ]
+            )
+            print("Object created at:" + program_path + target_base + outformat)
+        except Exception as e:
+            print(f"WARNING: Export to {outformat} failed: {e}")
 
     print("Project created at: " + program_path + target_path)
 
@@ -172,9 +202,9 @@ if __name__ == "__main__":
 
     if isinstance(data_paths[0], list):
         for paths in data_paths:
-            create_blender_project(paths)
+            create_blender_project(paths, blender_install_path, target_folder, program_path, blender_script_path)
     else:
-        create_blender_project(data_paths)
+        create_blender_project(data_paths, blender_install_path, target_folder, program_path, blender_script_path)
 
     print("")
     print("Done, Have a nice day!")

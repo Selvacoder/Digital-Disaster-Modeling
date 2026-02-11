@@ -1,1 +1,1 @@
-{"position": [5, 1, 0], "scale": [0.5, 0.5, 0.5], "rotation": [45, 45, 90], "shape": [16.240000000000002, 10.64, 1], "image_path": "Images/Examples/example3.png", "origin_path": "Data/6/", "data_path": "Data/22/"}
+{"position": [0, 0, 0], "scale": [1, 1, 1], "rotation": [0, 0, 90], "shape": [22.67, 40.31, 2.5], "image_path": "D:\\Projects\\2d_blueprint_to_3d_model\\Images\\Uploads\\c86bba5e-6335-4f84-af2f-8eae42e3d52c.png", "origin_path": "Data/22/", "data_path": "Data/22/"}

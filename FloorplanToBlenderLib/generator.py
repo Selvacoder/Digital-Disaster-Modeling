@@ -13,23 +13,17 @@ from . import calculate
 
 class Generator:
     __metaclass__ = abc.ABCMeta
-    # create verts (points 3d), points to use in mesh creations
-    verts = []
-    # create faces for each plane, describe order to create mesh points
-    faces = []
     # Height of waLL
     height = const.WALL_HEIGHT
     # Scale pixel value to 3d pos
     pixelscale = const.PIXEL_TO_3D_SCALE
-    # Object scale
-    scale = np.array([1, 1, 1])
-    # Index is many for when there are several floorplans
-    path = ""
 
     def __init__(self, gray, path, scale, info=False):
+        self.verts = []
+        self.faces = []
         self.path = path
-        self.shape = self.generate(gray, info)
         self.scale = scale
+        self.shape = self.generate(gray, info)
 
     def get_shape(self, verts):
         """
@@ -80,6 +74,13 @@ class Floor(Generator):
 
         # detect outer Contours (simple floor or roof solution)
         contour, _ = detect.outer_contours(gray)
+        
+        # Simplify contour to reduce messy triangulation lines
+        epsilon = 0.01 * cv2.arcLength(contour, True)
+        approx = cv2.approxPolyDP(contour, epsilon, True)
+        if len(approx) >= 3:
+            contour = approx
+
         # Create verts
         self.verts = transform.scale_point_to_vector(
             boxes=contour,
@@ -114,6 +115,17 @@ class Wall(Generator):
 
         # detect walls
         boxes, _ = detect.precise_boxes(wall_img)
+        
+        # Simplify wall contours
+        simplified_boxes = []
+        for box in boxes:
+            epsilon = 0.002 * cv2.arcLength(box, True)
+            approx = cv2.approxPolyDP(box, epsilon, True)
+            if len(approx) >= 3:
+                simplified_boxes.append(approx)
+            else:
+                simplified_boxes.append(box)
+        boxes = simplified_boxes
 
         # detect contour
         contour, _ = detect.outer_contours(gray)
@@ -166,6 +178,17 @@ class Room(Generator):
 
         # get box positions for rooms
         boxes, gray_rooms = detect.precise_boxes(gray_rooms, gray_rooms)
+        
+        # Simplify room contours
+        simplified_boxes = []
+        for box in boxes:
+            epsilon = 0.01 * cv2.arcLength(box, True)
+            approx = cv2.approxPolyDP(box, epsilon, True)
+            if len(approx) >= 3:
+                simplified_boxes.append(approx)
+            else:
+                simplified_boxes.append(box)
+        boxes = simplified_boxes
 
         self.verts, self.faces, counter = transform.create_4xn_verts_and_faces(
             boxes=boxes,

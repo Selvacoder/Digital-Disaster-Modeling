@@ -47,15 +47,34 @@ def blender_installed():
     Find path to blender installation
     Might be error prune, tested on ubuntu and windows
     """
+    # Try which first
+    path = which("blender")
+    if path:
+        return path
+
     if pf == "linux" or pf == "linux2":
         # linux
-        return find_files("blender", "/")
+        return find_files("blender", "/usr/local/bin") or find_files("blender", "/usr/bin")
     elif pf == "darwin":
         # OS X
-        return find_files("blender", "/")  # TODO: this need to be tested!
+        return "/Applications/Blender.app/Contents/MacOS/Blender" if os.path.exists("/Applications/Blender.app/Contents/MacOS/Blender") else None
     elif pf == "win32":
         # Windows
-        return find_files("blender.exe", "C:\\")
+        # Check common paths first to avoid slow disk walk
+        common_paths = [
+            r"C:\Program Files\Blender Foundation",
+            r"C:\Program Files (x86)\Blender Foundation",
+            r"C:\Program Files (x86)\Steam\steamapps\common\Blender",
+            r"C:\Program Files\Steam\steamapps\common\Blender",
+        ]
+        for base_path in common_paths:
+            if os.path.exists(base_path):
+                found = find_files("blender.exe", base_path)
+                if found:
+                    return found
+        
+        # Fallback to a limited search if common paths don't exist
+        return find_files("blender.exe", "C:\\Program Files")
 
 
 def get_blender_os_path():
