@@ -13,7 +13,7 @@ export default function Header({ onToggleSidebar }: { onToggleSidebar: () => voi
                 >
                     <Menu size={20} />
                 </button>
-                <div className="logo" style={{ margin: 0, fontSize: '1.5rem' }}>FLOORPLAN 3D</div>
+                <div className="logo" style={{ margin: 0, fontSize: '1.5rem' }}>Digital Disaster Modeling</div>
             </div>
         </header>
     );

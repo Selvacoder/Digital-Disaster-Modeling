@@ -5,8 +5,8 @@ import "../styles/globals.css";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-    title: "Blueprint to 3D | Modern Floorplan Converter",
-    description: "AI-powered 2D blueprint to 3D model transformer",
+    title: "Digital Disaster Modeling | 2D to 3D Blueprint Converter",
+    description: "Advanced AI-powered Digital Disaster Modeling and Blueprint Transformation",
 };
 
 export default function RootLayout({
