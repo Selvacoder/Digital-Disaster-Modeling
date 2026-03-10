@@ -23,11 +23,25 @@ body {
 }
 
 .sidebar {
-  width: 260px;
-  background: rgba(13, 13, 18, 0.8);
+  width: 280px;
+  background: rgba(13, 13, 20, 0.9);
   border-right: 1px solid var(--glass-border);
-  padding: 2rem;
-  backdrop-filter: blur(10px);
+  padding: 0;
+  backdrop-filter: blur(20px);
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  z-index: 100;
+}
+
+.sidebar.closed {
+  width: 0;
+  border-right-width: 0;
+  opacity: 0;
+  transform: translateX(-100%);
+  pointer-events: none;
 }
 
 .logo {
@@ -35,6 +49,7 @@ body {
   font-weight: 800;
   background: linear-gradient(135deg, var(--purple-glow), var(--blue-glow));
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
   margin-bottom: 3rem;
 }
@@ -43,6 +58,8 @@ body {
   flex: 1;
   padding: 2rem 3rem;
   background: radial-gradient(circle at 50% 0%, rgba(59, 130, 246, 0.05), transparent);
+  transition: padding 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  min-width: 0;
 }
 
 .header {
@@ -52,10 +69,20 @@ body {
   align-items: center;
 }
 
-.content-grid {
-  display: grid;
-  grid-template-columns: 400px 1fr;
+.content-dashboard {
+  display: flex;
+  flex-direction: column;
   gap: 2.5rem;
+}
+
+.top-section {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2.5rem;
+}
+
+.bottom-section {
+  width: 100%;
 }
 
 .glass {
@@ -125,7 +152,32 @@ body {
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.menu-toggle {
+  padding: 0.6rem;
+  border-radius: 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  transition: all 0.2s ease;
+  color: white;
+}
+
+.menu-toggle:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+  transform: scale(1.05);
+}
+
+.menu-toggle:active {
+  transform: scale(0.95);
 }
 
 .upload-area {
@@ -142,5 +194,12 @@ body {
   border-color: var(--blue-glow);
 }
 
-h3 { margin-top: 0; margin-bottom: 1.5rem; }
-p { color: var(--text-dim); line-height: 1.6; }
+h3 {
+  margin-top: 0;
+  margin-bottom: 1.5rem;
+}
+
+p {
+  color: var(--text-dim);
+  line-height: 1.6;
+}

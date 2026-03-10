@@ -1,0 +1,6 @@
+@echo off
+echo Stopping Python/FastAPI...
+taskkill /f /im python.exe
+echo Stopping Node/Next.js...
+taskkill /f /im node.exe
+pause

@@ -3,28 +3,51 @@
 import React from 'react';
 import { History, LayoutGrid, HelpCircle, User } from 'lucide-react';
 
-export default function Sidebar() {
+export default function Sidebar({ isOpen, activeTab, setActiveTab }: {
+    isOpen: boolean,
+    activeTab: string,
+    setActiveTab: (tab: string) => void
+}) {
     return (
-        <aside className="sidebar">
-            <div className="logo">FLOORPLAN 3D</div>
-            <nav style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '0.75rem', borderRadius: '10px', background: 'rgba(255,255,255,0.05)', color: '#fff', cursor: 'pointer' }}>
-                    <LayoutGrid size={20} />
-                    <span>Dashboard</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '0.75rem', borderRadius: '10px', color: '#94a3b8', cursor: 'pointer' }}>
-                    <History size={20} />
-                    <span>History</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '0.75rem', borderRadius: '10px', color: '#94a3b8', cursor: 'pointer' }}>
-                    <User size={20} />
-                    <span>Account</span>
-                </div>
-                <div style={{ marginTop: 'auto', display: 'flex', alignItems: 'center', gap: '12px', padding: '0.75rem', borderRadius: '10px', color: '#94a3b8', cursor: 'pointer' }}>
-                    <HelpCircle size={20} />
-                    <span>Help Center</span>
-                </div>
-            </nav>
+        <aside className={`sidebar ${isOpen ? '' : 'closed'}`}>
+            <div style={{ width: '280px', padding: '2rem', height: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
+                <nav style={{ display: 'flex', flexDirection: 'column', gap: '1rem', flex: 1 }}>
+                    <div
+                        onClick={() => setActiveTab('dashboard')}
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '12px',
+                            padding: '0.75rem',
+                            borderRadius: '10px',
+                            background: activeTab === 'dashboard' ? 'rgba(255,255,255,0.05)' : 'transparent',
+                            color: activeTab === 'dashboard' ? '#fff' : '#94a3b8',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s ease'
+                        }}
+                    >
+                        <LayoutGrid size={20} />
+                        <span style={{ whiteSpace: 'nowrap' }}>Dashboard</span>
+                    </div>
+                    <div
+                        onClick={() => setActiveTab('history')}
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '12px',
+                            padding: '0.75rem',
+                            borderRadius: '10px',
+                            background: activeTab === 'history' ? 'rgba(255,255,255,0.05)' : 'transparent',
+                            color: activeTab === 'history' ? '#fff' : '#94a3b8',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s ease'
+                        }}
+                    >
+                        <History size={20} />
+                        <span style={{ whiteSpace: 'nowrap' }}>History</span>
+                    </div>
+                </nav>
+            </div>
         </aside>
     );
 }

@@ -174,6 +174,39 @@ async def convert_blueprint(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/history")
+async def get_history():
+    history = []
+    if not os.path.exists(TARGET_DIR):
+        return []
+    
+    # Get all .obj files in Target
+    for filename in os.listdir(TARGET_DIR):
+        if filename.endswith(".obj"):
+            unique_id = os.path.splitext(filename)[0]
+            file_path = os.path.join(TARGET_DIR, filename)
+            
+            # Find corresponding upload to get a preview image if possible
+            preview_url = None
+            for upload in os.listdir(UPLOAD_DIR):
+                if upload.startswith(unique_id):
+                    preview_url = f"/uploads/{upload}"
+                    break
+            
+            stats = os.stat(file_path)
+            history.append({
+                "id": unique_id,
+                "filename": filename,
+                "timestamp": stats.st_mtime,
+                "model_url": f"/target/{filename}",
+                "preview_url": preview_url,
+                "size": stats.st_size
+            })
+            
+    # Sort by newest first
+    history.sort(key=lambda x: x["timestamp"], reverse=True)
+    return history
+
 # Static mounts
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 app.mount("/target", StaticFiles(directory=TARGET_DIR), name="target")

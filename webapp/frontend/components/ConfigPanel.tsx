@@ -58,75 +58,6 @@ export default function ConfigPanel({ onProcess, disabled }: ConfigPanelProps) {
                 />
             </div>
 
-            <div style={{ marginBottom: '2rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '1rem' }}>
-                    <Layers size={16} color="#34d399" />
-                    <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>Feature Toggles</span>
-                </div>
-
-                <div className="toggle-group" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                    <label style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '8px',
-                        fontSize: '0.85rem',
-                        color: '#cbd5e1',
-                        cursor: 'pointer',
-                        padding: '8px',
-                        background: 'rgba(255,255,255,0.03)',
-                        borderRadius: '8px',
-                        transition: 'all 0.2s'
-                    }}>
-                        <input type="checkbox" checked={generateWalls} onChange={e => setGenerateWalls(e.target.checked)} style={{ accentColor: '#3b82f6', width: '16px', height: '16px' }} />
-                        Walls
-                    </label>
-                    <label style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '8px',
-                        fontSize: '0.85rem',
-                        color: '#cbd5e1',
-                        cursor: 'pointer',
-                        padding: '8px',
-                        background: 'rgba(255,255,255,0.03)',
-                        borderRadius: '8px',
-                        transition: 'all 0.2s'
-                    }}>
-                        <input type="checkbox" checked={generateFloors} onChange={e => setGenerateFloors(e.target.checked)} style={{ accentColor: '#3b82f6', width: '16px', height: '16px' }} />
-                        Floors
-                    </label>
-                    <label style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '8px',
-                        fontSize: '0.85rem',
-                        color: '#cbd5e1',
-                        cursor: 'pointer',
-                        padding: '8px',
-                        background: 'rgba(255,255,255,0.03)',
-                        borderRadius: '8px',
-                        transition: 'all 0.2s'
-                    }}>
-                        <input type="checkbox" checked={generateRooms} onChange={e => setGenerateRooms(e.target.checked)} style={{ accentColor: '#3b82f6', width: '16px', height: '16px' }} />
-                        Ceilings
-                    </label>
-                    <label style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '8px',
-                        fontSize: '0.85rem',
-                        color: '#cbd5e1',
-                        cursor: 'pointer',
-                        padding: '8px',
-                        background: 'rgba(255,255,255,0.03)',
-                        borderRadius: '8px',
-                        transition: 'all 0.2s'
-                    }}>
-                        <input type="checkbox" checked={generateDetails} onChange={e => setGenerateDetails(e.target.checked)} style={{ accentColor: '#3b82f6', width: '16px', height: '16px' }} />
-                        Openings
-                    </label>
-                </div>
-            </div>
 
             <button
                 className="btn-primary"
@@ -137,6 +68,6 @@ export default function ConfigPanel({ onProcess, disabled }: ConfigPanelProps) {
                 <Play size={18} />
                 Generate 3D Model
             </button>
-        </div>
+        </div >
     );
 }

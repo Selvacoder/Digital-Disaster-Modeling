@@ -83,7 +83,13 @@ export default function ThreeViewer({ model }: { model: string | null }) {
     return (
         <Canvas shadows dpr={[1, 2]}>
             <PerspectiveCamera makeDefault position={[8, 8, 8]} fov={50} />
-            <OrbitControls makeDefault minPolarAngle={0} maxPolarAngle={Math.PI / 2.1} />
+            <OrbitControls
+                makeDefault
+                minPolarAngle={0}
+                maxPolarAngle={Math.PI / 2.1}
+                minDistance={4.6}    /* ~300% zoom */
+                maxDistance={138.5}  /* ~10% zoom */
+            />
 
             <ambientLight intensity={0.7} />
             <spotLight position={[10, 15, 10]} angle={0.3} penumbra={1} intensity={2} castShadow />
