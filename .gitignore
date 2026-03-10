@@ -1,0 +1,36 @@
+# Dependencies
+venv/
+node_modules/
+webapp/frontend/node_modules/
+.venv/
+env/
+dist/
+build/
+
+# Next.js
+.next/
+out/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local Project Data (Generated output)
+Data/
+Target/
+Images/Uploads/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
