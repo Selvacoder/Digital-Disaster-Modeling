@@ -1,4 +1,4 @@
-// File: d:\Projects\2d_blueprint_to_3d_model\webapp\frontend\app\layout.tsx
+// File: D:\Projects\2d_blueprint_to_3d_model\webapp\frontend\app\layout.tsx
 import * as entry from '../../../app/layout.js'
 import type { ResolvingMetadata, ResolvingViewport } from 'next/dist/lib/metadata/types/metadata-interface.js'
 

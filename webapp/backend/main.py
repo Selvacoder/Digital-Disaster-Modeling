@@ -1,4 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from typing import Optional
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from subprocess import check_output, CalledProcessError
@@ -206,6 +207,137 @@ async def get_history():
     # Sort by newest first
     history.sort(key=lambda x: x["timestamp"], reverse=True)
     return history
+
+@app.post("/simulate")
+async def simulate_disaster(
+    filename: str = Form(...),
+    disaster_type: str = Form(...),
+    wind_speed: Optional[float] = Form(None),
+    ambient_temp: Optional[float] = Form(None),
+    water_level: Optional[float] = Form(None),
+    rainfall_rate: Optional[float] = Form(None),
+    magnitude: Optional[float] = Form(None),
+    depth: Optional[float] = Form(None)
+):
+    """Run real disaster simulation using Blender."""
+    unique_id = os.path.splitext(filename)[0]
+    blend_path = os.path.join(TARGET_DIR, unique_id + ".blend")
+    
+    if not os.path.exists(blend_path):
+        raise HTTPException(status_code=404, detail="3D model not found. Please convert the blueprint first.")
+    
+    blender_path = get_blender_path()
+    if not blender_path:
+        raise HTTPException(status_code=500, detail="Blender not found on this system.")
+    
+    output_obj = os.path.join(TARGET_DIR, f"{unique_id}_simulated.obj")
+    script_path = os.path.join(ROOT_DIR, "Blender", "blender_simulate_disaster.py")
+    
+    # Build CLI args for the simulation script
+    extra_args = []
+    if disaster_type == "fire":
+        if wind_speed is not None:
+            extra_args.append(f"wind_speed={wind_speed}")
+        if ambient_temp is not None:
+            extra_args.append(f"ambient_temp={ambient_temp}")
+    elif disaster_type == "flood":
+        if water_level is not None:
+            extra_args.append(f"water_level={water_level}")
+        if rainfall_rate is not None:
+            extra_args.append(f"rainfall_rate={rainfall_rate}")
+    elif disaster_type == "earthquake":
+        if magnitude is not None:
+            extra_args.append(f"magnitude={magnitude}")
+        if depth is not None:
+            extra_args.append(f"depth={depth}")
+    
+    try:
+        cmd = [
+            blender_path,
+            "-noaudio",
+            "--background",
+            "--python", script_path,
+            "--",
+            blend_path,
+            output_obj,
+            disaster_type,
+        ] + extra_args
+        
+        check_output(cmd)
+        
+        # Verify the file was created
+        if not os.path.exists(output_obj):
+            raise Exception("Blender script finished but simulated model was not created.")
+        
+        import time
+        cache_buster = int(time.time())
+        return {
+            "status": "success",
+            "model_url": f"/target/{unique_id}_simulated.obj?t={cache_buster}",
+            "disaster_type": disaster_type
+        }
+    except CalledProcessError as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Simulation failed: {str(e)}")
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Simulation error: {str(e)}")
+
+@app.post("/pathfind")
+async def pathfind_evacuation(
+    filename: str = Form(...),
+    start_x: float = Form(...),
+    start_y: float = Form(...)
+):
+    """Run real evacuation pathfinding using Blender."""
+    unique_id = os.path.splitext(filename)[0]
+    blend_path = os.path.join(TARGET_DIR, unique_id + ".blend")
+    
+    if not os.path.exists(blend_path):
+        raise HTTPException(status_code=404, detail="3D model not found. Please convert the blueprint first.")
+    
+    blender_path = get_blender_path()
+    if not blender_path:
+        raise HTTPException(status_code=500, detail="Blender not found on this system.")
+    
+    output_obj = os.path.join(TARGET_DIR, f"{unique_id}_evacuated.obj")
+    script_path = os.path.join(ROOT_DIR, "Blender", "blender_evacuate_path.py")
+    
+    try:
+        cmd = [
+            blender_path,
+            "-noaudio",
+            "--background",
+            "--python", script_path,
+            "--",
+            blend_path,
+            output_obj,
+            str(start_x),
+            str(start_y),
+        ]
+        
+        check_output(cmd)
+        
+        # Verify the file was created
+        if not os.path.exists(output_obj):
+            raise Exception("Blender script finished but evacuation path model was not created.")
+        
+        import time
+        cache_buster = int(time.time())
+        return {
+            "status": "success",
+            "model_url": f"/target/{unique_id}_evacuated.obj?t={cache_buster}"
+        }
+    except CalledProcessError as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Pathfinding failed: {str(e)}")
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Pathfinding error: {str(e)}")
 
 # Static mounts
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")

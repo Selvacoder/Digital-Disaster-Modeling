@@ -1,0 +1,1 @@
+"D:\SteamLibrary\steamapps\common\Blender\blender.exe" -noaudio --background --python Blender/blender_simulate_disaster.py -- Target/2241e491-dcd1-405a-bf88-742e3d8f9fae.blend Target/test_sim.obj fire > blender_out.txt 2>&1

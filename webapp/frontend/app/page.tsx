@@ -6,16 +6,29 @@ import Sidebar from '../components/Sidebar';
 import BlueprintUploader from '../components/BlueprintUploader';
 import ConfigPanel from '../components/ConfigPanel';
 import ThreeViewer from '../components/ThreeViewer';
-import { Maximize, Minimize } from 'lucide-react';
+import { Maximize, Minimize, Cpu, Flame, Navigation, History, LayoutGrid } from 'lucide-react';
 
 export default function Home() {
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState('convert');
   const [uploadedFilename, setUploadedFilename] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [modelUrl, setModelUrl] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [history, setHistory] = useState<any[]>([]);
+  const [simulationData, setSimulationData] = useState<any>(null);
+  const [evacuationPath, setEvacuationPath] = useState<any[]>([]);
+  const [disasterType, setDisasterType] = useState('fire');
+  // Advanced Simulation State
+  const [windSpeed, setWindSpeed] = useState(15);
+  const [ambientTemp, setAmbientTemp] = useState(25);
+  const [waterLevel, setWaterLevel] = useState(1.5);
+  const [rainfallRate, setRainfallRate] = useState(20);
+  const [magnitude, setMagnitude] = useState(5.5);
+  const [depth, setDepth] = useState(10);
+  // Evacuation origin coordinates
+  const [originX, setOriginX] = useState(0);
+  const [originY, setOriginY] = useState(0);
 
   const viewerRef = React.useRef<HTMLDivElement>(null);
 
@@ -103,6 +116,79 @@ export default function Home() {
     }
   };
 
+  const handleSimulate = async () => {
+    if (!uploadedFilename) return;
+    setIsProcessing(true);
+
+    const formData = new FormData();
+    formData.append('filename', uploadedFilename);
+    formData.append('disaster_type', disasterType);
+    
+    // Add advanced params based on type
+    if (disasterType === 'fire') {
+      formData.append('wind_speed', windSpeed.toString());
+      formData.append('ambient_temp', ambientTemp.toString());
+    } else if (disasterType === 'flood') {
+      formData.append('water_level', waterLevel.toString());
+      formData.append('rainfall_rate', rainfallRate.toString());
+    } else if (disasterType === 'earthquake') {
+      formData.append('magnitude', magnitude.toString());
+      formData.append('depth', depth.toString());
+    }
+
+    try {
+      const response = await fetch('http://localhost:8000/simulate', {
+        method: 'POST',
+        body: formData,
+      });
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.detail || 'Simulation failed');
+      }
+      const data = await response.json();
+      // Load the real simulated model into the viewer
+      const simulatedModelUrl = `http://localhost:8000${data.model_url}`;
+      setModelUrl(simulatedModelUrl);
+      setSimulationData(data);
+    } catch (error: any) {
+      console.error('Simulation failed:', error);
+      alert(error.message || 'Simulation failed. Check backend logs.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handlePathfind = async () => {
+    if (!uploadedFilename) return;
+    setIsProcessing(true);
+
+    const formData = new FormData();
+    formData.append('filename', uploadedFilename);
+    formData.append('start_x', originX.toString());
+    formData.append('start_y', originY.toString());
+
+    try {
+      const response = await fetch('http://localhost:8000/pathfind', {
+        method: 'POST',
+        body: formData,
+      });
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.detail || 'Pathfinding failed');
+      }
+      const data = await response.json();
+      // Load the real evacuated model with path baked in
+      const evacuatedModelUrl = `http://localhost:8000${data.model_url}`;
+      setModelUrl(evacuatedModelUrl);
+      setEvacuationPath([]);
+    } catch (error: any) {
+      console.error('Pathfinding failed:', error);
+      alert(error.message || 'Pathfinding failed. Check backend logs.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   return (
     <div className="dashboard-container">
       <Sidebar
@@ -113,14 +199,180 @@ export default function Home() {
       <main className="main-content">
         <Header onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)} />
 
-        {activeTab === 'dashboard' ? (
+        {['convert', 'simulate', 'evacuate'].includes(activeTab) && (
+          <div className="tabs-container glass" style={{ 
+            margin: '1.5rem 2rem', 
+            padding: '0.5rem', 
+            display: 'flex', 
+            gap: '10px',
+            borderRadius: '12px',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}>
+            {[
+              { id: 'convert', label: '1. Convert', icon: <Cpu size={18} /> },
+              { id: 'simulate', label: '2. Simulate', icon: <Flame size={18} /> },
+              { id: 'evacuate', label: '3. Evacuate', icon: <Navigation size={18} /> }
+            ].map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id as any)}
+                className={`tab-btn ${activeTab === tab.id ? 'active' : ''}`}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '0.6rem 1.5rem',
+                  borderRadius: '8px',
+                  border: 'none',
+                  background: activeTab === tab.id ? 'rgba(139, 92, 246, 0.2)' : 'transparent',
+                  color: activeTab === tab.id ? '#a78bfa' : '#94a3b8',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease',
+                  fontWeight: 500,
+                  fontSize: '0.9rem'
+                }}
+              >
+                {tab.icon}
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        )}
+        {['convert', 'simulate', 'evacuate'].includes(activeTab) ? (
           <div className="content-dashboard">
             <div className="top-section">
-              <BlueprintUploader onUpload={setUploadedFilename} />
-              <ConfigPanel
-                onProcess={handleProcess}
-                disabled={!uploadedFilename || isProcessing}
-              />
+              {activeTab === 'convert' && (
+                <>
+                  <BlueprintUploader onUpload={setUploadedFilename} />
+                  <ConfigPanel
+                    onProcess={handleProcess}
+                    disabled={!uploadedFilename || isProcessing}
+                  />
+                </>
+              )}
+              {activeTab === 'simulate' && (
+                <div className="glass" style={{ flex: 1, padding: '2rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '1.5rem' }}>
+                    <Flame size={20} color="#ef4444" />
+                    <h3 style={{ margin: 0 }}>Disaster Simulation</h3>
+                  </div>
+                  
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
+                    {/* Left Column: Core Parameters */}
+                    <div style={{ paddingRight: '1rem', borderRight: '1px solid rgba(255,255,255,0.05)' }}>
+                      <p style={{ color: '#94a3b8', fontSize: '0.85rem', marginBottom: '1.5rem' }}>
+                        Core disaster selection and main intensity controls.
+                      </p>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                        <div>
+                          <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.5rem', color: '#64748b' }}>Disaster Type</label>
+                          <select 
+                            value={disasterType}
+                            onChange={(e) => setDisasterType(e.target.value)}
+                            style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', padding: '0.75rem', borderRadius: '8px' }}>
+                            <option value="fire">🔥 Fire Outbreak</option>
+                            <option value="flood">🌊 Flash Flood</option>
+                            <option value="earthquake">🏚️ Earthquake</option>
+                          </select>
+                        </div>
+                        <button 
+                          onClick={handleSimulate}
+                          disabled={!uploadedFilename || isProcessing}
+                          className="btn-primary" 
+                          style={{ background: '#ef4444', marginTop: '1rem', opacity: (!uploadedFilename || isProcessing) ? 0.5 : 1 }}>
+                          {isProcessing ? 'Simulating...' : 'Start Global Simulation'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Right Column: Detailed Parameters */}
+                    <div>
+                      <p style={{ color: '#94a3b8', fontSize: '0.85rem', marginBottom: '1.5rem' }}>
+                        Detailed environmental parameters for {disasterType}.
+                      </p>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                        {disasterType === 'fire' && (
+                          <>
+                            <div>
+                              <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.5rem', color: '#64748b' }}>Wind Speed (km/h): {windSpeed}</label>
+                              <input type="range" min="0" max="100" value={windSpeed} onChange={(e) => setWindSpeed(parseInt(e.target.value))} style={{ width: '100%', accentColor: '#f97316' }} />
+                            </div>
+                            <div>
+                              <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.5rem', color: '#64748b' }}>Ambient Temp (°C): {ambientTemp}</label>
+                              <input type="range" min="0" max="60" value={ambientTemp} onChange={(e) => setAmbientTemp(parseInt(e.target.value))} style={{ width: '100%', accentColor: '#f97316' }} />
+                            </div>
+                          </>
+                        )}
+                        {disasterType === 'flood' && (
+                          <>
+                            <div>
+                              <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.5rem', color: '#64748b' }}>Expected Water Level (m): {waterLevel}</label>
+                              <input type="range" step="0.1" min="0" max="10" value={waterLevel} onChange={(e) => setWaterLevel(parseFloat(e.target.value))} style={{ width: '100%', accentColor: '#3b82f6' }} />
+                            </div>
+                            <div>
+                              <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.5rem', color: '#64748b' }}>Rainfall Rate (mm/h): {rainfallRate}</label>
+                              <input type="range" min="0" max="100" value={rainfallRate} onChange={(e) => setRainfallRate(parseInt(e.target.value))} style={{ width: '100%', accentColor: '#3b82f6' }} />
+                            </div>
+                          </>
+                        )}
+                        {disasterType === 'earthquake' && (
+                          <>
+                            <div>
+                              <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.5rem', color: '#64748b' }}>Magnitude (Richter): {magnitude}</label>
+                              <input type="range" step="0.1" min="1" max="10" value={magnitude} onChange={(e) => setMagnitude(parseFloat(e.target.value))} style={{ width: '100%', accentColor: '#fbbf24' }} />
+                            </div>
+                            <div>
+                              <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.5rem', color: '#64748b' }}>Focal Depth (km): {depth}</label>
+                              <input type="range" min="0" max="50" value={depth} onChange={(e) => setDepth(parseInt(e.target.value))} style={{ width: '100%', accentColor: '#fbbf24' }} />
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {activeTab === 'evacuate' && (
+                <div className="glass" style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '1.5rem' }}>
+                    <Navigation size={20} color="#10b981" />
+                    <h3 style={{ margin: 0 }}>Evacuation Planner</h3>
+                  </div>
+                  <p style={{ color: '#94a3b8', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
+                    Set a starting point and find the fastest route to the nearest exit using A* pathfinding on the real 3D model.
+                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.5rem', color: '#64748b' }}>Origin X</label>
+                        <input 
+                          type="number" step="0.5"
+                          value={originX}
+                          onChange={(e) => setOriginX(parseFloat(e.target.value) || 0)}
+                          style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', padding: '0.75rem', borderRadius: '8px', boxSizing: 'border-box' }} 
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.5rem', color: '#64748b' }}>Origin Y</label>
+                        <input 
+                          type="number" step="0.5"
+                          value={originY}
+                          onChange={(e) => setOriginY(parseFloat(e.target.value) || 0)}
+                          style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', padding: '0.75rem', borderRadius: '8px', boxSizing: 'border-box' }} 
+                        />
+                      </div>
+                    </div>
+                    <button 
+                      onClick={handlePathfind}
+                      disabled={!uploadedFilename || isProcessing}
+                      className="btn-primary" 
+                      style={{ background: '#10b981', marginTop: '1rem', opacity: (!uploadedFilename || isProcessing) ? 0.5 : 1 }}>
+                      {isProcessing ? 'Calculating...' : 'Calculate Path'}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
             <div className="bottom-section">
               <div className="viewer-card glass" style={{ height: isFullscreen ? '100%' : '600px' }}>
@@ -145,7 +397,10 @@ export default function Home() {
                     </div>
                   ) : (
                     <>
-                      <ThreeViewer model={modelUrl} />
+                       <ThreeViewer 
+                        model={modelUrl} 
+                        isSimulated={!!simulationData || evacuationPath.length > 0}
+                      />
                       {modelUrl && (
                         <a
                           href={modelUrl}
@@ -203,7 +458,7 @@ export default function Home() {
                     <button
                       onClick={() => {
                         setModelUrl(`http://localhost:8000${item.model_url}?t=${Date.now()}`);
-                        setActiveTab('dashboard');
+                        setActiveTab('convert');
                       }}
                       className="btn-primary"
                       style={{ flex: 1, padding: '0.6rem', fontSize: '0.9rem' }}

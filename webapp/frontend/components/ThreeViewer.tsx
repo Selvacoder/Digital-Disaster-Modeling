@@ -6,7 +6,7 @@ import { OrbitControls, PerspectiveCamera, Environment, ContactShadows, Grid } f
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import * as THREE from 'three';
 
-function Model({ url }: { url: string | null }) {
+function Model({ url, useBuiltinMaterials }: { url: string | null, useBuiltinMaterials?: boolean }) {
     const obj = useLoader(OBJLoader, url || '');
 
     // Center and scale the model
@@ -16,54 +16,72 @@ function Model({ url }: { url: string | null }) {
         // Clone to avoid modifying the cached version
         const clonedObj = obj.clone();
 
-        // Apply high-contrast materials based on mesh names (Wall, Floor, Room, etc.)
-        clonedObj.traverse((child) => {
-            if (child instanceof THREE.Mesh) {
-                const name = child.name.toLowerCase();
+        // Only apply custom materials on the base model (non-simulated)
+        if (!useBuiltinMaterials) {
+            clonedObj.traverse((child) => {
+                if (child instanceof THREE.Mesh) {
+                    const name = child.name.toLowerCase();
 
-                let color = '#cbd5e1'; // Default grey
-                let roughness = 0.5;
-                let metalness = 0.1;
+                    let color = '#cbd5e1';
+                    let roughness = 0.5;
+                    let metalness = 0.1;
 
-                if (name.includes('wall')) {
-                    color = '#334155'; // Dark slate/charcoal for walls
-                    roughness = 0.8;
-                } else if (name.includes('floor')) {
-                    color = '#f1f5f9'; // Very light grey/white for floor
-                    roughness = 0.4;
-                } else if (name.includes('room')) {
-                    color = '#e2e8f0'; // Light grey for ceilings/rooms
-                    roughness = 0.6;
-                } else if (name.includes('window')) {
-                    color = '#bae6fd'; // Light blue for windows
-                    roughness = 0.1;
-                    metalness = 0.5;
-                } else if (name.includes('door')) {
-                    color = '#92400e'; // Brown for doors
-                    roughness = 0.9;
+                    if (name.includes('wall')) {
+                        color = '#334155';
+                        roughness = 0.8;
+                    } else if (name.includes('floor')) {
+                        color = '#f1f5f9';
+                        roughness = 0.4;
+                    } else if (name.includes('room')) {
+                        color = '#e2e8f0';
+                        roughness = 0.6;
+                    } else if (name.includes('window')) {
+                        color = '#bae6fd';
+                        roughness = 0.1;
+                        metalness = 0.5;
+                    } else if (name.includes('door')) {
+                        color = '#92400e';
+                        roughness = 0.9;
+                    }
+
+                    child.material = new THREE.MeshStandardMaterial({
+                        color: color,
+                        roughness: roughness,
+                        metalness: metalness,
+                        side: THREE.DoubleSide
+                    });
+
+                    child.castShadow = true;
+                    child.receiveShadow = true;
                 }
-
-                child.material = new THREE.MeshStandardMaterial({
-                    color: color,
-                    roughness: roughness,
-                    metalness: metalness,
-                    side: THREE.DoubleSide
-                });
-
-                child.castShadow = true;
-                child.receiveShadow = true;
-            }
-        });
+            });
+        } else {
+            // For simulated models, just ensure shadows work
+            clonedObj.traverse((child) => {
+                if (child instanceof THREE.Mesh) {
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+                    // Keep the OBJ materials but ensure double-sided rendering
+                    if (child.material) {
+                        if (Array.isArray(child.material)) {
+                            child.material.forEach((m: any) => { m.side = THREE.DoubleSide; });
+                        } else {
+                            child.material.side = THREE.DoubleSide;
+                        }
+                    }
+                }
+            });
+        }
 
         // Center the model
         const box = new THREE.Box3().setFromObject(clonedObj);
         const center = box.getCenter(new THREE.Vector3());
         clonedObj.position.x -= center.x;
-        clonedObj.position.y -= box.min.y; // Sit on the ground
+        clonedObj.position.y -= box.min.y;
         clonedObj.position.z -= center.z;
 
         return clonedObj;
-    }, [obj]);
+    }, [obj, useBuiltinMaterials]);
 
     if (!url) return null;
 
@@ -79,7 +97,10 @@ function PlaceholderModel() {
     );
 }
 
-export default function ThreeViewer({ model }: { model: string | null }) {
+export default function ThreeViewer({ model, isSimulated }: {
+    model: string | null,
+    isSimulated?: boolean
+}) {
     return (
         <Canvas shadows dpr={[1, 2]}>
             <PerspectiveCamera makeDefault position={[8, 8, 8]} fov={50} />
@@ -87,8 +108,8 @@ export default function ThreeViewer({ model }: { model: string | null }) {
                 makeDefault
                 minPolarAngle={0}
                 maxPolarAngle={Math.PI / 2.1}
-                minDistance={4.6}    /* ~300% zoom */
-                maxDistance={138.5}  /* ~10% zoom */
+                minDistance={4.6}
+                maxDistance={138.5}
             />
 
             <ambientLight intensity={0.7} />
@@ -97,7 +118,9 @@ export default function ThreeViewer({ model }: { model: string | null }) {
 
             <Suspense fallback={<PlaceholderModel />}>
                 {model ? (
-                    <Model url={model} />
+                    <group>
+                        <Model url={model} useBuiltinMaterials={isSimulated} />
+                    </group>
                 ) : (
                     <group position={[0, 0.5, 0]}>
                         <mesh>
