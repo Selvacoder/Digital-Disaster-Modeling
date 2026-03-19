@@ -26,9 +26,21 @@ export default function Home() {
   const [rainfallRate, setRainfallRate] = useState(20);
   const [magnitude, setMagnitude] = useState(5.5);
   const [depth, setDepth] = useState(10);
-  // Evacuation origin coordinates
-  const [originX, setOriginX] = useState(0);
-  const [originY, setOriginY] = useState(0);
+  
+  const [targetX, setTargetX] = useState<number | null>(null);
+  const [targetZ, setTargetZ] = useState<number | null>(null);
+  const [pathfindingAlgo, setPathfindingAlgo] = useState('astar');
+
+  const handlePointSelect = (x: number, y: number, z: number) => {
+    // Just click to set the target point
+    setTargetX(x);
+    setTargetZ(z);
+  };
+
+  const markers = [];
+  if (targetX !== null && targetZ !== null) {
+      markers.push({ x: targetX, y: 0.5, z: targetZ, color: '#f97316' }); // Orange Destination
+  }
 
   const viewerRef = React.useRef<HTMLDivElement>(null);
 
@@ -162,10 +174,17 @@ export default function Home() {
     if (!uploadedFilename) return;
     setIsProcessing(true);
 
+    if (targetX === null || targetZ === null) {
+      alert("Please click the 3D model to set the Target Point!");
+      setIsProcessing(false);
+      return;
+    }
+
     const formData = new FormData();
     formData.append('filename', uploadedFilename);
-    formData.append('start_x', originX.toString());
-    formData.append('start_y', originY.toString());
+    formData.append('start_x', targetX.toString());
+    formData.append('start_y', (-targetZ).toString());
+    formData.append('algorithm', pathfindingAlgo);
 
     try {
       const response = await fetch('http://localhost:8000/pathfind', {
@@ -339,36 +358,68 @@ export default function Home() {
                     <Navigation size={20} color="#10b981" />
                     <h3 style={{ margin: 0 }}>Evacuation Planner</h3>
                   </div>
-                  <p style={{ color: '#94a3b8', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
-                    Set a starting point and find the fastest route to the nearest exit using A* pathfinding on the real 3D model.
+                  <p style={{ color: '#94a3b8', fontSize: '0.9rem', marginBottom: '1.5rem', lineHeight: '1.5' }}>
+                    Click anywhere on the floor of the 3D model to place your <b>Start Position</b>.
+                    <br/>The algorithm will automatically find the nearest exit and calculate the safest route for your evacuation!
                   </p>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                      <div>
-                        <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.5rem', color: '#64748b' }}>Origin X</label>
-                        <input 
-                          type="number" step="0.5"
-                          value={originX}
-                          onChange={(e) => setOriginX(parseFloat(e.target.value) || 0)}
-                          style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', padding: '0.75rem', borderRadius: '8px', boxSizing: 'border-box' }} 
-                        />
-                      </div>
-                      <div>
-                        <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.5rem', color: '#64748b' }}>Origin Y</label>
-                        <input 
-                          type="number" step="0.5"
-                          value={originY}
-                          onChange={(e) => setOriginY(parseFloat(e.target.value) || 0)}
-                          style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', padding: '0.75rem', borderRadius: '8px', boxSizing: 'border-box' }} 
-                        />
-                      </div>
+                  
+                  <div style={{ background: 'rgba(249, 115, 22, 0.1)', color: '#f97316', padding: '0.75rem', borderRadius: '8px', marginBottom: '1.5rem', fontSize: '0.85rem', textAlign: 'center', border: '1px dashed rgba(249, 115, 22, 0.3)' }}>
+                    📍 {targetX !== null ? 'Start Point Placed!' : 'Click on the 3D Model Below!'}
+                  </div>
+
+                  {/* Algorithm Selector */}
+                  <div style={{ marginBottom: '1.5rem' }}>
+                    <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.5rem', color: '#64748b' }}>
+                      Pathfinding Algorithm
+                    </label>
+                    <div style={{ display: 'flex', gap: '8px', background: 'rgba(255,255,255,0.05)', padding: '4px', borderRadius: '8px' }}>
+                      <button 
+                        onClick={() => setPathfindingAlgo('astar')}
+                        style={{ 
+                          flex: 1, 
+                          padding: '0.5rem', 
+                          borderRadius: '6px', 
+                          border: 'none', 
+                          background: pathfindingAlgo === 'astar' ? '#f97316' : 'transparent',
+                          color: pathfindingAlgo === 'astar' ? 'white' : '#94a3b8',
+                          fontSize: '0.8rem',
+                          cursor: 'pointer',
+                          transition: 'all 0.2s'
+                        }}
+                      >
+                        Standard (A*)
+                      </button>
+                      <button 
+                        onClick={() => setPathfindingAlgo('qlearning')}
+                        style={{ 
+                          flex: 1, 
+                          padding: '0.5rem', 
+                          borderRadius: '6px', 
+                          border: 'none', 
+                          background: pathfindingAlgo === 'qlearning' ? '#f97316' : 'transparent',
+                          color: pathfindingAlgo === 'qlearning' ? 'white' : '#94a3b8',
+                          fontSize: '0.8rem',
+                          cursor: 'pointer',
+                          transition: 'all 0.2s'
+                        }}
+                      >
+                        AI Learning (Q-Learning)
+                      </button>
                     </div>
+                    {pathfindingAlgo === 'qlearning' && (
+                      <p style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '0.5rem', fontStyle: 'italic' }}>
+                        Note: AI mode runs 6,000 training episodes in real-time to find the best route!
+                      </p>
+                    )}
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                     <button 
                       onClick={handlePathfind}
-                      disabled={!uploadedFilename || isProcessing}
+                      disabled={!uploadedFilename || isProcessing || targetX === null}
                       className="btn-primary" 
-                      style={{ background: '#10b981', marginTop: '1rem', opacity: (!uploadedFilename || isProcessing) ? 0.5 : 1 }}>
-                      {isProcessing ? 'Calculating...' : 'Calculate Path'}
+                      style={{ background: '#f97316', marginTop: '0.5rem', opacity: (!uploadedFilename || isProcessing || targetX === null) ? 0.5 : 1 }}>
+                      {isProcessing ? 'Calculating Route...' : 'Generate Evacuation Route'}
                     </button>
                   </div>
                 </div>
@@ -400,6 +451,8 @@ export default function Home() {
                        <ThreeViewer 
                         model={modelUrl} 
                         isSimulated={!!simulationData || evacuationPath.length > 0}
+                        onPointSelect={handlePointSelect}
+                        markers={markers}
                       />
                       {modelUrl && (
                         <a

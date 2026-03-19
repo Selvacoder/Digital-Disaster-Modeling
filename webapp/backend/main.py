@@ -84,8 +84,8 @@ def create_blender_project(data_paths, target_folder_name, wall_height):
             + data_paths
         )
         
-        # 2. Export to OBJ for web viewing
-        obj_path_abs = target_base_abs + ".obj"
+        # 2. Export to GLB for web viewing
+        glb_path_abs = target_base_abs + ".glb"
         check_output(
             [
                 blender_install_path,
@@ -94,12 +94,12 @@ def create_blender_project(data_paths, target_folder_name, wall_height):
                 "--python",
                 os.path.join(program_path, "Blender/blender_export_any.py"),
                 target_path_abs,
-                ".obj",
-                obj_path_abs
+                ".glb",
+                glb_path_abs
             ]
         )
         
-        return obj_path_abs
+        return glb_path_abs
     except CalledProcessError as e:
         print(f"Blender error: {e.output.decode() if e.output else str(e)}")
         raise e
@@ -160,14 +160,14 @@ async def convert_blueprint(
         # 1. Generate local vertex/face data
         data_path = execution.simple_single(fp)
         
-        # 2. Trigger Blender to build project and export OBJ
-        obj_path = create_blender_project([data_path], unique_id, wall_height)
+        # 2. Trigger Blender to build project and export GLB
+        glb_path = create_blender_project([data_path], unique_id, wall_height)
         
         import time
         cache_buster = int(time.time())
         return {
             "status": "success",
-            "model_url": f"/target/{unique_id}.obj?t={cache_buster}",
+            "model_url": f"/target/{unique_id}.glb?t={cache_buster}",
             "blend_url": f"/target/{unique_id}.blend?t={cache_buster}"
         }
     except Exception as e:
@@ -181,9 +181,9 @@ async def get_history():
     if not os.path.exists(TARGET_DIR):
         return []
     
-    # Get all .obj files in Target
+    # Get all .glb files in Target
     for filename in os.listdir(TARGET_DIR):
-        if filename.endswith(".obj"):
+        if filename.endswith(".glb"):
             unique_id = os.path.splitext(filename)[0]
             file_path = os.path.join(TARGET_DIR, filename)
             
@@ -230,7 +230,7 @@ async def simulate_disaster(
     if not blender_path:
         raise HTTPException(status_code=500, detail="Blender not found on this system.")
     
-    output_obj = os.path.join(TARGET_DIR, f"{unique_id}_simulated.obj")
+    output_obj = os.path.join(TARGET_DIR, f"{unique_id}_simulated.glb")
     script_path = os.path.join(ROOT_DIR, "Blender", "blender_simulate_disaster.py")
     
     # Build CLI args for the simulation script
@@ -273,7 +273,7 @@ async def simulate_disaster(
         cache_buster = int(time.time())
         return {
             "status": "success",
-            "model_url": f"/target/{unique_id}_simulated.obj?t={cache_buster}",
+            "model_url": f"/target/{unique_id}_simulated.glb?t={cache_buster}",
             "disaster_type": disaster_type
         }
     except CalledProcessError as e:
@@ -289,20 +289,28 @@ async def simulate_disaster(
 async def pathfind_evacuation(
     filename: str = Form(...),
     start_x: float = Form(...),
-    start_y: float = Form(...)
+    start_y: float = Form(...),
+    dest_x: Optional[float] = Form(None),
+    dest_y: Optional[float] = Form(None),
+    algorithm: str = Form("astar") # 'astar' or 'qlearning'
 ):
-    """Run real evacuation pathfinding using Blender."""
+    """Run real evacuation pathfinding using Blender, supporting optional destination points."""
     unique_id = os.path.splitext(filename)[0]
-    blend_path = os.path.join(TARGET_DIR, unique_id + ".blend")
     
-    if not os.path.exists(blend_path):
-        raise HTTPException(status_code=404, detail="3D model not found. Please convert the blueprint first.")
+    # Try to use the simulated aftermath model if available, otherwise fallback to pristine blueprint
+    simulated_glb = os.path.join(TARGET_DIR, unique_id + "_simulated.glb")
+    if os.path.exists(simulated_glb):
+        blend_path = simulated_glb
+    else:
+        blend_path = os.path.join(TARGET_DIR, unique_id + ".blend")
+        if not os.path.exists(blend_path):
+            raise HTTPException(status_code=404, detail="3D model not found. Please convert the blueprint first.")
     
     blender_path = get_blender_path()
     if not blender_path:
         raise HTTPException(status_code=500, detail="Blender not found on this system.")
     
-    output_obj = os.path.join(TARGET_DIR, f"{unique_id}_evacuated.obj")
+    output_obj = os.path.join(TARGET_DIR, f"{unique_id}_evacuated.glb")
     script_path = os.path.join(ROOT_DIR, "Blender", "blender_evacuate_path.py")
     
     try:
@@ -316,6 +324,9 @@ async def pathfind_evacuation(
             output_obj,
             str(start_x),
             str(start_y),
+            str(dest_x) if dest_x is not None else "None",
+            str(dest_y) if dest_y is not None else "None",
+            algorithm
         ]
         
         check_output(cmd)
@@ -328,7 +339,7 @@ async def pathfind_evacuation(
         cache_buster = int(time.time())
         return {
             "status": "success",
-            "model_url": f"/target/{unique_id}_evacuated.obj?t={cache_buster}"
+            "model_url": f"/target/{unique_id}_evacuated.glb?t={cache_buster}"
         }
     except CalledProcessError as e:
         import traceback
