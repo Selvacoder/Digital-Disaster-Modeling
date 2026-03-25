@@ -74,6 +74,35 @@ def create_solid_material(name, color):
     return mat
 
 
+def create_pbr_material(name, color, roughness=0.75, metallic=0.05, emission=None, emission_strength=0.0):
+    """Create a principled material with optional emission for fire damage stages."""
+    mat = bpy.data.materials.new(name=name)
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    nodes.clear()
+
+    output = nodes.new("ShaderNodeOutputMaterial")
+    principled = nodes.new("ShaderNodeBsdfPrincipled")
+    principled.inputs["Base Color"].default_value = color
+    principled.inputs["Roughness"].default_value = roughness
+    principled.inputs["Metallic"].default_value = metallic
+    if emission is not None:
+        # Blender socket naming differs across versions:
+        # - 3.6: "Emission"
+        # - 4.x: "Emission Color"
+        if "Emission Color" in principled.inputs:
+            principled.inputs["Emission Color"].default_value = emission
+        elif "Emission" in principled.inputs:
+            principled.inputs["Emission"].default_value = emission
+
+        if "Emission Strength" in principled.inputs:
+            principled.inputs["Emission Strength"].default_value = emission_strength
+
+    links.new(principled.outputs["BSDF"], output.inputs["Surface"])
+    return mat
+
+
 def create_transparent_material(name, color, alpha=0.4):
     """Create a transparent material for flood water."""
     mat = bpy.data.materials.new(name=name)
@@ -93,14 +122,43 @@ def create_transparent_material(name, color, alpha=0.4):
     return mat
 
 
+def create_smoke_material(name, alpha=0.18):
+    """Create a soft dark transparent material for smoke puffs."""
+    mat = bpy.data.materials.new(name=name)
+    mat.use_nodes = True
+    if hasattr(mat, 'blend_method'):
+        mat.blend_method = 'BLEND'
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    nodes.clear()
+
+    output = nodes.new("ShaderNodeOutputMaterial")
+    principled = nodes.new("ShaderNodeBsdfPrincipled")
+    principled.inputs["Base Color"].default_value = (0.06, 0.06, 0.07, 1.0)
+    principled.inputs["Alpha"].default_value = alpha
+    principled.inputs["Roughness"].default_value = 0.95
+    links.new(principled.outputs["BSDF"], output.inputs["Surface"])
+    return mat
+
+
 def get_all_mesh_objects():
     """Get all mesh objects in the scene."""
     return [obj for obj in bpy.data.objects if obj.type == 'MESH']
 
 
 def get_object_center(obj):
-    """Get world-space center of an object."""
-    return obj.matrix_world @ obj.location
+    """Get world-space geometric center of an object from its bounding box."""
+    world_bbox = [obj.matrix_world @ mathutils.Vector(corner) for corner in obj.bound_box]
+    center = mathutils.Vector((0.0, 0.0, 0.0))
+    for v in world_bbox:
+        center += v
+    return center / max(1, len(world_bbox))
+
+
+def get_object_base_z(obj):
+    """Get the lowest world-space Z coordinate of an object's bounding box."""
+    world_bbox = [obj.matrix_world @ mathutils.Vector(corner) for corner in obj.bound_box]
+    return min(v.z for v in world_bbox)
 
 
 def get_bounding_box(obj):
@@ -141,63 +199,143 @@ def get_scene_scale(meshes):
 
 
 def simulate_fire(params):
-    """Apply realistic post-fire structural damage."""
-    wind_speed = params.get("wind_speed", 15)
-    
-    # Realistic scorched, dark brownish-grey material for fire damage
-    # (0.2, 0.15, 0.15) looks like burnt wood/plaster, unlike flat black which looks like a rendering error.
-    burnt_mat = create_solid_material("BurntMat", (0.2, 0.15, 0.15, 1.0))
+    """Apply center-origin fire spread with full-model coverage, burn stages, and collapse."""
+    wind_speed = float(params.get("wind_speed", 15.0))
+    ambient_temp = float(params.get("ambient_temp", 25.0))
 
     meshes = get_all_mesh_objects()
-    if not meshes: return
-
-    diag, _xy = get_scene_scale(meshes)
-    neighbor_radius = max(1.0, diag * 0.1)  
-
-    sources = random.sample(meshes, min(2, len(meshes)))
-    affected = set(sources)
-    
-    for _ in range(int(1 + wind_speed / 15)):
-        new_affected = set()
-        for obj in affected:
-            for other in meshes:
-                if other not in affected and (obj.location - other.location).length < neighbor_radius:
-                    new_affected.add(other)
-        affected.update(new_affected)
+    if not meshes:
+        return
 
     min_v, max_v = get_scene_bounds(meshes)
+    diag, xy_extent = get_scene_scale(meshes)
+    floor_z = float(min_v.z) if min_v is not None else 0.0
+
+    # Fire behavior controls tuned for realism.
+    base_intensity = max(0.35, min(1.65, 0.45 + ambient_temp / 75.0 + wind_speed / 140.0))
+    spread_radius = max(1.0, xy_extent * (0.16 + wind_speed / 420.0))
+    radial_extent = max(1.0, xy_extent * 0.46)
+    scene_center = mathutils.Vector(((min_v.x + max_v.x) * 0.5, (min_v.y + max_v.y) * 0.5, floor_z))
+    max_center_dist = max(1.0, xy_extent * 0.72)
+
+    # Pseudo-time spread progress: high heat/wind pushes the front farther, faster.
+    spread_progress = min(1.0, 0.42 + 0.26 * base_intensity + wind_speed / 240.0)
+
+    # Materials representing progressive burn stages.
+    soot_mat = create_pbr_material("FireSootMat", (0.24, 0.20, 0.18, 1.0), roughness=0.88, metallic=0.02)
+    char_mat = create_pbr_material("FireCharMat", (0.12, 0.09, 0.08, 1.0), roughness=0.95, metallic=0.03)
+    ember_mat = create_pbr_material(
+        "FireEmberMat",
+        (0.16, 0.10, 0.08, 1.0),
+        roughness=0.82,
+        metallic=0.03,
+        emission=(0.95, 0.28, 0.08, 1.0),
+        emission_strength=1.6,
+    )
+
+    # Center-origin ignition sources avoid one-side bias and create global spread.
+    src_count = 4
+    source_centers = []
+    for idx in range(src_count):
+        angle = (idx / src_count) * math.tau + random.uniform(-0.2, 0.2)
+        ring = xy_extent * random.uniform(0.03, 0.11)
+        source_centers.append(
+            mathutils.Vector(
+                (
+                    scene_center.x + math.cos(angle) * ring,
+                    scene_center.y + math.sin(angle) * ring,
+                    floor_z + random.uniform(0.05, 0.2),
+                )
+            )
+        )
+
+    # Wind direction drives asymmetric spread.
+    theta = random.uniform(0, math.tau)
+    wind_dir = mathutils.Vector((math.cos(theta), math.sin(theta), 0.0)).normalized()
+
+    debris_budget = 0
 
     for obj in meshes:
-        if obj in affected:
-            # We add severe structural damage
-            if ("wall" in obj.name.lower() or "room" in obj.name.lower()):
-                
-                # Turn the walls into a scorched/burnt color!
-                obj.data.materials.clear()
-                obj.data.materials.append(burnt_mat)
-                
-                if random.random() > 0.4:
-                    obj.location.z -= random.uniform(0, min(0.3, obj.location.z))
-                    obj.rotation_euler.x += random.uniform(-0.15, 0.15)
-                    obj.rotation_euler.y += random.uniform(-0.15, 0.15)
-                    obj.rotation_euler.z += random.uniform(-0.05, 0.05)
-                
-            # Add scattered burnt debris blocks (like fallen roof beams)
-            if "floor" in obj.name.lower() or "room" in obj.name.lower():
-                for i in range(3):
-                    if min_v is None: break
-                    offset = mathutils.Vector(
-                        (random.uniform(-1, 1), random.uniform(-1, 1), 0.0)
-                    ) * max(0.5, diag * 0.05)
-                    
-                    bpy.ops.mesh.primitive_cube_add(
-                        size=max(0.2, diag * 0.01), 
-                        location=(obj.location.x + offset.x, obj.location.y + offset.y, float(min_v.z) + 0.1)
-                    )
-                    debris = bpy.context.active_object
-                    debris.scale = (random.uniform(1.0, 4.0), random.uniform(0.5, 1.5), random.uniform(0.2, 0.6))
-                    debris.rotation_euler = (random.uniform(0, 3.14), random.uniform(0, 3.14), random.uniform(0, 3.14))
-                    debris.data.materials.append(burnt_mat)
+        name = obj.name.lower()
+        center = get_object_center(obj)
+
+        # Compute damage score with center radial propagation plus source hotspots.
+        score = 0.0
+        for src in source_centers:
+            vec = center - src
+            dist = max(0.01, vec.length)
+            proximity = math.exp(-dist / spread_radius)
+
+            horizontal = mathutils.Vector((vec.x, vec.y, 0.0))
+            if horizontal.length > 1e-6:
+                horizontal.normalize()
+                downwind = max(0.0, horizontal.dot(wind_dir))
+            else:
+                downwind = 0.0
+
+            wind_boost = 1.0 + downwind * (wind_speed / 60.0)
+            height_damp = 1.0 - max(0.0, min(0.35, (center.z - floor_z) / max(1.0, diag) * 0.8))
+            local = proximity * wind_boost * height_damp
+            if local > score:
+                score = local
+
+        center_vec = mathutils.Vector((center.x - scene_center.x, center.y - scene_center.y, 0.0))
+        center_dist = center_vec.length
+        radial = math.exp(-center_dist / radial_extent)
+        dist_norm = min(1.0, center_dist / max_center_dist)
+
+        # Outer rooms ignite later: delay ramps from center to perimeter.
+        delay_start = max(0.0, dist_norm - 0.22)
+        delay_band = 0.32
+        delay_ratio = max(0.0, min(1.0, (spread_progress - delay_start) / max(1e-6, delay_band)))
+        ignition_delay = delay_ratio * delay_ratio * (3.0 - 2.0 * delay_ratio)
+
+        center_boost = 1.0 + 0.55 * (1.0 - dist_norm)
+        baseline = (0.05 + 0.28 * radial * center_boost) * ignition_delay
+
+        score = max(score * base_intensity, baseline * base_intensity)
+        score = min(score, 1.35)
+
+        # Apply burn-stage material by damage score.
+        if score > 0.08 and any(k in name for k in ("wall", "room", "floor", "door", "window")):
+            obj.data.materials.clear()
+            if score > 0.78:
+                obj.data.materials.append(ember_mat)
+            elif score > 0.42:
+                obj.data.materials.append(char_mat)
+            else:
+                obj.data.materials.append(soot_mat)
+
+        # Structural deformation for heavily damaged structures.
+        if score > 0.52 and any(k in name for k in ("wall", "room")):
+            settle = (0.02 + 0.08 * min(1.0, score)) * (0.9 + 0.1 * radial)
+            base_z = get_object_base_z(obj)
+            max_sink = max(0.0, (base_z - floor_z) - 0.02)
+            obj.location.z = max(floor_z, obj.location.z - min(settle, max_sink))
+            # Keep damage visually strong but avoid directional side collapse artifacts.
+            obj.rotation_euler.z += random.uniform(-0.03, 0.03) * min(1.0, score)
+
+        # Debris near severely damaged structural elements.
+        if score > 0.62 and debris_budget < 70 and min_v is not None:
+            for _ in range(2):
+                offset = mathutils.Vector((random.uniform(-1, 1), random.uniform(-1, 1), 0.0)) * max(0.35, diag * 0.03)
+                bpy.ops.mesh.primitive_cube_add(
+                    size=max(0.16, diag * 0.008),
+                    location=(center.x + offset.x, center.y + offset.y, floor_z + 0.08),
+                )
+                debris = bpy.context.active_object
+                debris.scale = (
+                    random.uniform(0.7, 2.6),
+                    random.uniform(0.3, 1.4),
+                    random.uniform(0.2, 0.8),
+                )
+                debris.rotation_euler = (
+                    random.uniform(0, math.pi),
+                    random.uniform(0, math.pi),
+                    random.uniform(0, math.pi),
+                )
+                debris.data.materials.append(char_mat)
+                debris_budget += 1
 
 
 def simulate_flood(params):
@@ -264,64 +402,130 @@ def simulate_flood(params):
 
 
 def simulate_earthquake(params):
-    """Apply earthquake fracturing and rubble."""
-    magnitude = params.get("magnitude", 6.0)
+    """Apply magnitude/depth-driven earthquake shaking, cracking, and debris."""
+    magnitude = float(params.get("magnitude", 6.0))
+    depth = float(params.get("depth", 10.0))
     
     rubble_mat = create_solid_material("RubbleMat", (0.3, 0.3, 0.3, 1.0))
     cracked_mat = create_solid_material("CrackedMat", (0.2, 0.2, 0.25, 1.0))
     
     meshes = get_all_mesh_objects()
-    if not meshes: return
-    
-    diag, _xy = get_scene_scale(meshes)
+    if not meshes:
+        return
+
+    min_v, max_v = get_scene_bounds(meshes)
+    if min_v is None or max_v is None:
+        return
+
+    diag, xy_extent = get_scene_scale(meshes)
+    center = mathutils.Vector(((min_v.x + max_v.x) * 0.5, (min_v.y + max_v.y) * 0.5, min_v.z))
+
+    mag_norm = max(0.0, min(1.0, (magnitude - 4.0) / 4.5))
+    depth_factor = math.exp(-max(0.0, depth - 5.0) / 22.0)
+    quake_power = max(0.15, min(1.35, 0.2 + 1.15 * mag_norm * (0.55 + 0.45 * depth_factor)))
+    major_damage_threshold = 0.5 + 0.25 * (1.0 - quake_power)
+
+    # Fault-like directional bands create realistic uneven shaking zones.
+    fault_count = 2 if quake_power < 0.9 else 3
+    fault_data = []
+    for _ in range(fault_count):
+        angle = random.uniform(0.0, math.tau)
+        direction = mathutils.Vector((math.cos(angle), math.sin(angle), 0.0)).normalized()
+        shift = mathutils.Vector(
+            (
+                random.uniform(-0.2, 0.2) * xy_extent,
+                random.uniform(-0.2, 0.2) * xy_extent,
+                0.0,
+            )
+        )
+        band_center = center + shift
+        band_width = max(0.7, xy_extent * random.uniform(0.06, 0.14))
+        fault_data.append((direction, band_center, band_width))
 
     for obj in meshes:
-        if "wall" in obj.name.lower() or "room" in obj.name.lower():
-            rand_val = random.random()
-            
-            # Massive collapse effect (Object level, not vertex level)
-            if rand_val > 0.6:
-                # Tilt and collapse
-                obj.rotation_euler.x += random.uniform(-0.15, 0.15)
-                obj.rotation_euler.y += random.uniform(-0.15, 0.15)
-                obj.rotation_euler.z += random.uniform(-0.1, 0.1)
-                
-                # Shift, but do not sink below ground
-                obj.location.x += random.uniform(-0.2, 0.2)
-                obj.location.y += random.uniform(-0.2, 0.2)
-                # Sink slightly, but bounded to not go through floor
-                obj.location.z -= random.uniform(0, min(0.2, obj.location.z))
-                
-            if rand_val > 0.4:
-                # Apply cracked material to simulating burnt/damaged structures
-                obj.data.materials.clear()
-                obj.data.materials.append(cracked_mat)
-                
-    # Add scattered jagged rubble (no perfect spheres)
-    min_v, max_v = get_scene_bounds(meshes)
-    if min_v is not None and max_v is not None:
-        for i in range(35):
-            radius = max(0.3, diag * 0.015)
-            scale_z = random.uniform(0.2, 0.8)
-            
-            # Ensure the rubble rests ON the floor instead of penetrating below it
-            z_offset = radius * scale_z + random.uniform(0.01, 0.5)
-            
-            # Use icosphere with low subdivisions for a jagged, rocky look
-            bpy.ops.mesh.primitive_ico_sphere_add(
-                subdivisions=1,
-                radius=radius,
-                location=(
-                    random.uniform(min_v.x, max_v.x),
-                    random.uniform(min_v.y, max_v.y),
-                    float(min_v.z + z_offset),
-                ),
-            )
-            rub = bpy.context.active_object
-            # Scale unevenly to form long or flat rocks
-            rub.scale = (random.uniform(0.5, 2.0), random.uniform(0.5, 2.0), scale_z)
-            rub.rotation_euler = (random.uniform(0, 3.14), random.uniform(0, 3.14), random.uniform(0, 3.14))
-            rub.data.materials.append(rubble_mat)
+        if not ("wall" in obj.name.lower() or "room" in obj.name.lower() or "door" in obj.name.lower()):
+            continue
+
+        world_center = get_object_center(obj)
+        cxy = mathutils.Vector((world_center.x, world_center.y, 0.0))
+        center_dist = (cxy - mathutils.Vector((center.x, center.y, 0.0))).length
+        radial_damage = math.exp(-center_dist / max(1.0, xy_extent * 0.45))
+
+        fault_damage = 0.0
+        for direction, band_center, band_width in fault_data:
+            rel = cxy - mathutils.Vector((band_center.x, band_center.y, 0.0))
+            normal = mathutils.Vector((-direction.y, direction.x, 0.0))
+            dist_to_fault = abs(rel.dot(normal))
+            influence = math.exp(-(dist_to_fault ** 2) / (2.0 * (band_width ** 2)))
+            fault_damage = max(fault_damage, influence)
+
+        local_damage = quake_power * (0.45 * radial_damage + 0.75 * fault_damage)
+        if local_damage < 0.14:
+            continue
+
+        rot_amp = 0.03 + 0.12 * local_damage
+        shift_amp = (0.02 + 0.12 * local_damage) * (diag / max(1.0, xy_extent + 0.001))
+
+        obj.rotation_euler.x += random.uniform(-rot_amp, rot_amp) * 0.35
+        obj.rotation_euler.y += random.uniform(-rot_amp, rot_amp) * 0.35
+        obj.rotation_euler.z += random.uniform(-0.07, 0.07) * local_damage
+        obj.location.x += random.uniform(-shift_amp, shift_amp)
+        obj.location.y += random.uniform(-shift_amp, shift_amp)
+
+        sink = random.uniform(0.0, 0.08) * local_damage
+        base_z = get_object_base_z(obj)
+        max_sink = max(0.0, (base_z - min_v.z) - 0.02)
+        obj.location.z = max(min_v.z, obj.location.z - min(sink, max_sink))
+
+        if local_damage >= 0.32:
+            obj.data.materials.clear()
+            obj.data.materials.append(cracked_mat)
+
+    rubble_count = int(18 + 52 * quake_power)
+    for _ in range(rubble_count):
+        fault_pick = random.choice(fault_data)
+        direction, band_center, band_width = fault_pick
+        t = random.uniform(-0.55, 0.55) * xy_extent
+        normal = mathutils.Vector((-direction.y, direction.x, 0.0))
+        side = random.uniform(-1.0, 1.0)
+
+        base_xy = mathutils.Vector((band_center.x, band_center.y, 0.0)) + direction * t + normal * side * band_width * 0.9
+        x = max(min_v.x, min(max_v.x, base_xy.x))
+        y = max(min_v.y, min(max_v.y, base_xy.y))
+
+        size = max(0.08, diag * random.uniform(0.006, 0.018) * (0.7 + 0.7 * quake_power))
+        z = float(min_v.z + size * random.uniform(0.8, 1.6))
+
+        if random.random() < 0.65:
+            bpy.ops.mesh.primitive_cube_add(size=size, location=(x, y, z))
+        else:
+            bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=1, radius=size * 0.8, location=(x, y, z))
+
+        rub = bpy.context.active_object
+        rub.scale = (
+            random.uniform(0.5, 2.4),
+            random.uniform(0.4, 1.9),
+            random.uniform(0.2, 1.0),
+        )
+        rub.rotation_euler = (
+            random.uniform(0, math.pi),
+            random.uniform(0, math.pi),
+            random.uniform(0, math.pi),
+        )
+        rub.data.materials.append(rubble_mat)
+
+    if quake_power > major_damage_threshold:
+        severe_objs = [o for o in meshes if ("wall" in o.name.lower() or "room" in o.name.lower())]
+        random.shuffle(severe_objs)
+        for obj in severe_objs[: max(3, int(len(severe_objs) * 0.12))]:
+            obj.rotation_euler.x += random.uniform(-0.28, 0.28)
+            obj.rotation_euler.y += random.uniform(-0.28, 0.28)
+            sink = random.uniform(0.08, 0.26)
+            base_z = get_object_base_z(obj)
+            max_sink = max(0.0, (base_z - min_v.z) - 0.02)
+            obj.location.z = max(min_v.z, obj.location.z - min(sink, max_sink))
+            obj.data.materials.clear()
+            obj.data.materials.append(cracked_mat)
 
 
 def export_glb(output_path):

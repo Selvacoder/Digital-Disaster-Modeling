@@ -4,9 +4,11 @@ import React, { useState } from 'react';
 import Header from '../components/Header';
 import Sidebar from '../components/Sidebar';
 import BlueprintUploader from '../components/BlueprintUploader';
-import ConfigPanel from '../components/ConfigPanel';
 import ThreeViewer from '../components/ThreeViewer';
-import { Maximize, Minimize, Cpu, Flame, Navigation, History, LayoutGrid } from 'lucide-react';
+import { Maximize, Minimize, Cpu, Flame, Navigation, Activity, Play } from 'lucide-react';
+
+const DEFAULT_WALL_HEIGHT = 2.5;
+const DEFAULT_PIXEL_SCALE = 100;
 
 export default function Home() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -17,6 +19,7 @@ export default function Home() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [history, setHistory] = useState<any[]>([]);
   const [simulationData, setSimulationData] = useState<any>(null);
+  const [damagePrediction, setDamagePrediction] = useState<any>(null);
   const [evacuationPath, setEvacuationPath] = useState<any[]>([]);
   const [disasterType, setDisasterType] = useState('fire');
   // Advanced Simulation State
@@ -26,19 +29,121 @@ export default function Home() {
   const [rainfallRate, setRainfallRate] = useState(20);
   const [magnitude, setMagnitude] = useState(5.5);
   const [depth, setDepth] = useState(10);
+  const [buildingMaterial, setBuildingMaterial] = useState('concrete');
+  const [fragilityIndex, setFragilityIndex] = useState(0.65);
+  const [wallQuality, setWallQuality] = useState(0.75);
   
   const [targetX, setTargetX] = useState<number | null>(null);
   const [targetZ, setTargetZ] = useState<number | null>(null);
-  const [pathfindingAlgo, setPathfindingAlgo] = useState('astar');
+  const isEvacuateTab = activeTab === 'evacuate';
+  const hasSimulationResult = !!simulationData;
+
+  const handleUpload = (filename: string | null) => {
+    setUploadedFilename(filename);
+    setSimulationData(null);
+    setDamagePrediction(null);
+    setTargetX(null);
+    setTargetZ(null);
+    setModelUrl(null);
+  };
+
+  const inferDisasterIntensity = () => {
+    if (disasterType === 'fire') {
+      const qcProxy = Math.max(0, 0.9 * ambientTemp + 0.45 * windSpeed);
+      const hrrProxy = Math.max(0, 0.7 * ambientTemp + 0.85 * windSpeed);
+      const growthTerm = 0.18 * Math.sqrt(Math.max(0, windSpeed * ambientTemp));
+      return Math.min(100, Math.max(0, 0.55 * qcProxy + 0.45 * hrrProxy + growthTerm - 8));
+    }
+    if (disasterType === 'flood') {
+      const velocityProxy = Math.max(0.05, 0.08 * rainfallRate + 0.4 * waterLevel);
+      const impactW = waterLevel * Math.sqrt(1 + velocityProxy * velocityProxy);
+      const aepProxy = Math.max(0.005, Math.min(0.98, 0.22 * Math.exp(-0.35 * waterLevel) + 0.18 * Math.exp(-0.03 * rainfallRate)));
+      const returnPeriod = Math.min(500, 1 / aepProxy);
+      const extremeFactor = Math.min(1, Math.log10(returnPeriod + 1) / 2.7);
+      return Math.min(100, Math.max(0, 18 * waterLevel + 0.55 * rainfallRate + 1.6 * impactW + 18 * extremeFactor - 10));
+    }
+    if (disasterType === 'earthquake') {
+      let base = 55;
+      let upper = 72;
+      let frac = 0.5;
+      if (magnitude < 2.0) {
+        base = 5; upper = 14; frac = Math.max(0, Math.min(1, magnitude / 2.0));
+      } else if (magnitude < 3.0) {
+        base = 14; upper = 24; frac = magnitude - 2.0;
+      } else if (magnitude < 4.0) {
+        base = 24; upper = 40; frac = magnitude - 3.0;
+      } else if (magnitude < 5.0) {
+        base = 40; upper = 55; frac = magnitude - 4.0;
+      } else if (magnitude < 6.0) {
+        base = 55; upper = 72; frac = magnitude - 5.0;
+      } else if (magnitude < 7.0) {
+        base = 72; upper = 88; frac = magnitude - 6.0;
+      } else if (magnitude < 8.0) {
+        base = 88; upper = 97; frac = magnitude - 7.0;
+      } else {
+        base = 97; upper = 100; frac = Math.min(1, magnitude - 8.0);
+      }
+      const depthFactor = Math.max(0.75, Math.min(1.1, 0.75 + 0.35 * Math.exp(-Math.max(0, depth - 8) / 18)));
+      return Math.min(100, Math.max(0, (base + (upper - base) * frac) * depthFactor));
+    }
+    return 60;
+  };
+
+  const normalizeRoomType = (valueRaw: string | undefined) => {
+    const value = (valueRaw || '').toLowerCase();
+    if (value.includes('kitchen')) return 'kitchen';
+    if (value.includes('bed')) return 'bedroom';
+    if (value.includes('bath')) return 'bathroom';
+    if (value.includes('living') || value.includes('lounge')) return 'living';
+    if (value.includes('hall') || value.includes('corridor')) return 'hallway';
+    if (value.includes('garage')) return 'garage';
+    if (value.includes('store') || value.includes('storage') || value.includes('closet')) return 'storage';
+    return null;
+  };
+
+  const severityToColor = (severity: number) => {
+    const s = Number.isFinite(severity) ? Math.max(0, Math.min(100, severity)) : 0;
+    if (s < 35) return '#22c55e';
+    if (s < 70) return '#f59e0b';
+    return '#ef4444';
+  };
+
+  const roomTypeSeverity = React.useMemo(() => {
+    const map: Record<string, number> = {};
+    const areas = damagePrediction?.areas || [];
+    areas.forEach((area: any) => {
+      const key = normalizeRoomType(area.name);
+      if (!key) return;
+      const sev = Number(area.damage_severity);
+      if (Number.isFinite(sev)) {
+        map[key] = map[key] === undefined ? sev : Math.max(map[key], sev);
+      }
+    });
+    return map;
+  }, [damagePrediction]);
+
+  const damageAreaLabels = React.useMemo(() => {
+    const areas = damagePrediction?.areas || [];
+    return areas
+      .filter((area: any) => Number.isFinite(Number(area.preview_x)) && Number.isFinite(Number(area.preview_z)))
+      .map((area: any) => ({
+        name: String(area.name || ''),
+        x: Number(area.preview_x),
+        y: 0.8,
+        // Blender floor Y maps to Three.js Z with inverted sign.
+        z: -Number(area.preview_z),
+      }));
+  }, [damagePrediction]);
 
   const handlePointSelect = (x: number, y: number, z: number) => {
+    if (!isEvacuateTab) return;
     // Just click to set the target point
     setTargetX(x);
     setTargetZ(z);
   };
 
   const markers = [];
-  if (targetX !== null && targetZ !== null) {
+  if (isEvacuateTab && targetX !== null && targetZ !== null) {
       markers.push({ x: targetX, y: 0.5, z: targetZ, color: '#f97316' }); // Orange Destination
   }
 
@@ -59,6 +164,13 @@ export default function Home() {
       fetchHistory();
     }
   }, [activeTab]);
+
+  React.useEffect(() => {
+    if (!isEvacuateTab) {
+      setTargetX(null);
+      setTargetZ(null);
+    }
+  }, [isEvacuateTab]);
 
   const toggleFullscreen = () => {
     if (!viewerRef.current) return;
@@ -83,27 +195,24 @@ export default function Home() {
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
   }, []);
 
-  const handleProcess = async (config: {
-    wallHeight: number,
-    pixelScale: number,
-    generateWalls: boolean,
-    generateFloors: boolean,
-    generateRooms: boolean,
-    generateDetails: boolean
-  }) => {
+  const handleProcess = async () => {
     if (!uploadedFilename) return;
 
     setIsProcessing(true);
     setModelUrl(null);
+    setSimulationData(null);
+    setDamagePrediction(null);
+    setTargetX(null);
+    setTargetZ(null);
 
     const formData = new FormData();
     formData.append('filename', uploadedFilename);
-    formData.append('wall_height', config.wallHeight.toString());
-    formData.append('pixel_scale', config.pixelScale.toString());
-    formData.append('generate_walls', config.generateWalls.toString());
-    formData.append('generate_floors', config.generateFloors.toString());
-    formData.append('generate_rooms', config.generateRooms.toString());
-    formData.append('generate_details', config.generateDetails.toString());
+    formData.append('wall_height', DEFAULT_WALL_HEIGHT.toString());
+    formData.append('pixel_scale', DEFAULT_PIXEL_SCALE.toString());
+    formData.append('generate_walls', 'true');
+    formData.append('generate_floors', 'true');
+    formData.append('generate_rooms', 'true');
+    formData.append('generate_details', 'true');
 
     try {
       const response = await fetch('http://localhost:8000/convert', {
@@ -126,6 +235,42 @@ export default function Home() {
       alert('Failed to convert blueprint. Check backend logs.');
       setIsProcessing(false);
     }
+  };
+
+  const requestDamagePrediction = async () => {
+    if (!uploadedFilename) return;
+
+    const formData = new FormData();
+    formData.append('filename', uploadedFilename);
+    formData.append('disaster_type', disasterType);
+    formData.append('disaster_intensity', inferDisasterIntensity().toFixed(2));
+    formData.append('building_material', buildingMaterial);
+    formData.append('fragility_index', fragilityIndex.toString());
+    formData.append('wall_quality', wallQuality.toString());
+
+    if (disasterType === 'fire') {
+      formData.append('wind_speed', windSpeed.toString());
+      formData.append('ambient_temp', ambientTemp.toString());
+    } else if (disasterType === 'flood') {
+      formData.append('water_level', waterLevel.toString());
+      formData.append('rainfall_rate', rainfallRate.toString());
+    } else if (disasterType === 'earthquake') {
+      formData.append('magnitude', magnitude.toString());
+      formData.append('depth', depth.toString());
+    }
+
+    const response = await fetch('http://localhost:8000/damage-predict', {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.detail || 'Damage prediction failed');
+    }
+
+    const data = await response.json();
+    setDamagePrediction(data);
   };
 
   const handleSimulate = async () => {
@@ -162,6 +307,10 @@ export default function Home() {
       const simulatedModelUrl = `http://localhost:8000${data.model_url}`;
       setModelUrl(simulatedModelUrl);
       setSimulationData(data);
+
+      // Auto-run damage prediction from simulation inputs.
+      // Keep user on the simulate page; damage tab is manual navigation.
+      await requestDamagePrediction();
     } catch (error: any) {
       console.error('Simulation failed:', error);
       alert(error.message || 'Simulation failed. Check backend logs.');
@@ -184,7 +333,8 @@ export default function Home() {
     formData.append('filename', uploadedFilename);
     formData.append('start_x', targetX.toString());
     formData.append('start_y', (-targetZ).toString());
-    formData.append('algorithm', pathfindingAlgo);
+    formData.append('use_simulated', hasSimulationResult ? 'true' : 'false');
+    formData.append('algorithm', 'qlearning');
 
     try {
       const response = await fetch('http://localhost:8000/pathfind', {
@@ -218,7 +368,7 @@ export default function Home() {
       <main className="main-content">
         <Header onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)} />
 
-        {['convert', 'simulate', 'evacuate'].includes(activeTab) && (
+        {['convert', 'simulate', 'damage', 'evacuate'].includes(activeTab) && (
           <div className="tabs-container glass" style={{ 
             margin: '1.5rem 2rem', 
             padding: '0.5rem', 
@@ -231,7 +381,8 @@ export default function Home() {
             {[
               { id: 'convert', label: '1. Convert', icon: <Cpu size={18} /> },
               { id: 'simulate', label: '2. Simulate', icon: <Flame size={18} /> },
-              { id: 'evacuate', label: '3. Evacuate', icon: <Navigation size={18} /> }
+              { id: 'damage', label: '3. Damage', icon: <Activity size={18} /> },
+              { id: 'evacuate', label: '4. Evacuate', icon: <Navigation size={18} /> }
             ].map(tab => (
               <button
                 key={tab.id}
@@ -258,55 +409,106 @@ export default function Home() {
             ))}
           </div>
         )}
-        {['convert', 'simulate', 'evacuate'].includes(activeTab) ? (
+        {['convert', 'simulate', 'damage', 'evacuate'].includes(activeTab) ? (
           <div className="content-dashboard">
             <div className="top-section">
               {activeTab === 'convert' && (
-                <>
-                  <BlueprintUploader onUpload={setUploadedFilename} />
-                  <ConfigPanel
-                    onProcess={handleProcess}
-                    disabled={!uploadedFilename || isProcessing}
-                  />
-                </>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <div className="glass" style={{ padding: '2rem' }}>
+                    <h3 style={{ marginTop: 0, marginBottom: '1rem' }}>Upload Blueprint</h3>
+                    <BlueprintUploader onUpload={handleUpload} />
+                    <button
+                      className="btn-primary"
+                      style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', marginTop: '1rem' }}
+                      onClick={handleProcess}
+                      disabled={!uploadedFilename || isProcessing}
+                    >
+                      <Play size={18} />
+                      Generate 3D Model
+                    </button>
+                  </div>
+                </div>
               )}
               {activeTab === 'simulate' && (
-                <div className="glass" style={{ flex: 1, padding: '2rem' }}>
+                <div className="glass" style={{ flex: 1, gridColumn: '1 / -1', padding: '2rem' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '1.5rem' }}>
                     <Flame size={20} color="#ef4444" />
                     <h3 style={{ margin: 0 }}>Disaster Simulation</h3>
                   </div>
                   
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(320px, 1fr))', gap: '1.2rem' }}>
                     {/* Left Column: Core Parameters */}
-                    <div style={{ paddingRight: '1rem', borderRight: '1px solid rgba(255,255,255,0.05)' }}>
+                    <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '14px', padding: '1.2rem' }}>
                       <p style={{ color: '#94a3b8', fontSize: '0.85rem', marginBottom: '1.5rem' }}>
                         Core disaster selection and main intensity controls.
                       </p>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
                         <div>
                           <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.5rem', color: '#64748b' }}>Disaster Type</label>
-                          <select 
-                            value={disasterType}
-                            onChange={(e) => setDisasterType(e.target.value)}
-                            style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', padding: '0.75rem', borderRadius: '8px' }}>
-                            <option value="fire">🔥 Fire Outbreak</option>
-                            <option value="flood">🌊 Flash Flood</option>
-                            <option value="earthquake">🏚️ Earthquake</option>
-                          </select>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '8px' }}>
+                            {[
+                              { id: 'fire', label: 'Fire' },
+                              { id: 'flood', label: 'Flood' },
+                              { id: 'earthquake', label: 'Earthquake' },
+                            ].map((item) => (
+                              <button
+                                key={item.id}
+                                type="button"
+                                onClick={() => setDisasterType(item.id)}
+                                style={{
+                                  padding: '0.65rem 0.5rem',
+                                  borderRadius: '8px',
+                                  border: disasterType === item.id ? '1px solid rgba(239,68,68,0.6)' : '1px solid rgba(255,255,255,0.12)',
+                                  background: disasterType === item.id ? 'rgba(239,68,68,0.2)' : 'rgba(255,255,255,0.04)',
+                                  color: disasterType === item.id ? '#fecaca' : '#cbd5e1',
+                                  fontSize: '0.82rem',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                {item.label}
+                              </button>
+                            ))}
+                          </div>
                         </div>
-                        <button 
-                          onClick={handleSimulate}
-                          disabled={!uploadedFilename || isProcessing}
-                          className="btn-primary" 
-                          style={{ background: '#ef4444', marginTop: '1rem', opacity: (!uploadedFilename || isProcessing) ? 0.5 : 1 }}>
-                          {isProcessing ? 'Simulating...' : 'Start Global Simulation'}
-                        </button>
+                        <div>
+                          <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.5rem', color: '#64748b' }}>Building Material</label>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '8px' }}>
+                            {['concrete', 'wood', 'masonry', 'steel'].map((mat) => (
+                              <button
+                                key={mat}
+                                type="button"
+                                onClick={() => setBuildingMaterial(mat)}
+                                style={{
+                                  padding: '0.65rem 0.5rem',
+                                  borderRadius: '8px',
+                                  border: buildingMaterial === mat ? '1px solid rgba(99,102,241,0.6)' : '1px solid rgba(255,255,255,0.12)',
+                                  background: buildingMaterial === mat ? 'rgba(99,102,241,0.2)' : 'rgba(255,255,255,0.04)',
+                                  color: buildingMaterial === mat ? '#c7d2fe' : '#cbd5e1',
+                                  fontSize: '0.82rem',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                  textTransform: 'capitalize',
+                                }}
+                              >
+                                {mat}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.5rem', color: '#64748b' }}>Fragility Index: {fragilityIndex.toFixed(2)}</label>
+                          <input type="range" min="0.1" max="1" step="0.01" value={fragilityIndex} onChange={(e) => setFragilityIndex(parseFloat(e.target.value))} style={{ width: '100%', accentColor: '#e879f9' }} />
+                        </div>
+                        <div>
+                          <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.5rem', color: '#64748b' }}>Wall Quality: {wallQuality.toFixed(2)}</label>
+                          <input type="range" min="0.1" max="1" step="0.01" value={wallQuality} onChange={(e) => setWallQuality(parseFloat(e.target.value))} style={{ width: '100%', accentColor: '#60a5fa' }} />
+                        </div>
                       </div>
                     </div>
 
                     {/* Right Column: Detailed Parameters */}
-                    <div>
+                    <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '14px', padding: '1.2rem' }}>
                       <p style={{ color: '#94a3b8', fontSize: '0.85rem', marginBottom: '1.5rem' }}>
                         Detailed environmental parameters for {disasterType}.
                       </p>
@@ -319,7 +521,7 @@ export default function Home() {
                             </div>
                             <div>
                               <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.5rem', color: '#64748b' }}>Ambient Temp (°C): {ambientTemp}</label>
-                              <input type="range" min="0" max="60" value={ambientTemp} onChange={(e) => setAmbientTemp(parseInt(e.target.value))} style={{ width: '100%', accentColor: '#f97316' }} />
+                              <input type="range" min="0" max="150" value={ambientTemp} onChange={(e) => setAmbientTemp(parseInt(e.target.value))} style={{ width: '100%', accentColor: '#f97316' }} />
                             </div>
                           </>
                         )}
@@ -350,80 +552,140 @@ export default function Home() {
                       </div>
                     </div>
                   </div>
+
+                  <button 
+                    onClick={handleSimulate}
+                    disabled={!uploadedFilename || isProcessing}
+                    className="btn-primary" 
+                    style={{ background: '#ef4444', marginTop: '1.2rem', width: '100%', opacity: (!uploadedFilename || isProcessing) ? 0.5 : 1 }}>
+                    {isProcessing ? 'Simulating...' : 'Start Global Simulation'}
+                  </button>
+
                 </div>
               )}
-              {activeTab === 'evacuate' && (
-                <div className="glass" style={{ flex: 1 }}>
+              {activeTab === 'damage' && (
+                <div className="glass" style={{ flex: 1, gridColumn: '1 / -1', padding: '2rem' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '1.5rem' }}>
-                    <Navigation size={20} color="#10b981" />
-                    <h3 style={{ margin: 0 }}>Evacuation Planner</h3>
+                    <Activity size={20} color="#a855f7" />
+                    <h3 style={{ margin: 0 }}>Damage Prediction</h3>
                   </div>
-                  <p style={{ color: '#94a3b8', fontSize: '0.9rem', marginBottom: '1.5rem', lineHeight: '1.5' }}>
-                    Click anywhere on the floor of the 3D model to place your <b>Start Position</b>.
-                    <br/>The algorithm will automatically find the nearest exit and calculate the safest route for your evacuation!
+
+                  <p style={{ color: '#94a3b8', fontSize: '0.9rem', marginBottom: '1.2rem' }}>
+                    Random Forest prediction results from the latest simulation inputs.
                   </p>
-                  
-                  <div style={{ background: 'rgba(249, 115, 22, 0.1)', color: '#f97316', padding: '0.75rem', borderRadius: '8px', marginBottom: '1.5rem', fontSize: '0.85rem', textAlign: 'center', border: '1px dashed rgba(249, 115, 22, 0.3)' }}>
-                    📍 {targetX !== null ? 'Start Point Placed!' : 'Click on the 3D Model Below!'}
-                  </div>
 
-                  {/* Algorithm Selector */}
-                  <div style={{ marginBottom: '1.5rem' }}>
-                    <label style={{ display: 'block', fontSize: '0.85rem', marginBottom: '0.5rem', color: '#64748b' }}>
-                      Pathfinding Algorithm
-                    </label>
-                    <div style={{ display: 'flex', gap: '8px', background: 'rgba(255,255,255,0.05)', padding: '4px', borderRadius: '8px' }}>
-                      <button 
-                        onClick={() => setPathfindingAlgo('astar')}
-                        style={{ 
-                          flex: 1, 
-                          padding: '0.5rem', 
-                          borderRadius: '6px', 
-                          border: 'none', 
-                          background: pathfindingAlgo === 'astar' ? '#f97316' : 'transparent',
-                          color: pathfindingAlgo === 'astar' ? 'white' : '#94a3b8',
-                          fontSize: '0.8rem',
-                          cursor: 'pointer',
-                          transition: 'all 0.2s'
-                        }}
-                      >
-                        Standard (A*)
-                      </button>
-                      <button 
-                        onClick={() => setPathfindingAlgo('qlearning')}
-                        style={{ 
-                          flex: 1, 
-                          padding: '0.5rem', 
-                          borderRadius: '6px', 
-                          border: 'none', 
-                          background: pathfindingAlgo === 'qlearning' ? '#f97316' : 'transparent',
-                          color: pathfindingAlgo === 'qlearning' ? 'white' : '#94a3b8',
-                          fontSize: '0.8rem',
-                          cursor: 'pointer',
-                          transition: 'all 0.2s'
-                        }}
-                      >
-                        AI Learning (Q-Learning)
-                      </button>
+                  {!damagePrediction ? (
+                    <div style={{ background: 'rgba(168, 85, 247, 0.12)', color: '#d8b4fe', padding: '1rem', borderRadius: '10px', border: '1px dashed rgba(168,85,247,0.35)' }}>
+                      No prediction available yet. Run simulation first.
                     </div>
-                    {pathfindingAlgo === 'qlearning' && (
-                      <p style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '0.5rem', fontStyle: 'italic' }}>
-                        Note: AI mode runs 6,000 training episodes in real-time to find the best route!
-                      </p>
-                    )}
-                  </div>
+                  ) : (
+                    <>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                        <h4 style={{ margin: 0, color: '#e9d5ff' }}>Predicted Building Damage</h4>
+                        <span style={{ fontSize: '0.75rem', padding: '4px 8px', borderRadius: '999px', background: 'rgba(147, 51, 234, 0.2)', color: '#d8b4fe' }}>
+                          {damagePrediction.summary?.building_risk || 'Unknown'} Risk
+                        </span>
+                      </div>
 
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                    <button 
-                      onClick={handlePathfind}
-                      disabled={!uploadedFilename || isProcessing || targetX === null}
-                      className="btn-primary" 
-                      style={{ background: '#f97316', marginTop: '0.5rem', opacity: (!uploadedFilename || isProcessing || targetX === null) ? 0.5 : 1 }}>
-                      {isProcessing ? 'Calculating Route...' : 'Generate Evacuation Route'}
-                    </button>
-                  </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
+                        <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: '10px', padding: '0.75rem' }}>
+                          <div style={{ color: '#94a3b8', fontSize: '0.75rem' }}>Detected Areas</div>
+                          <div style={{ color: '#f8fafc', fontWeight: 600 }}>{damagePrediction.summary?.room_count}</div>
+                        </div>
+                        <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: '10px', padding: '0.75rem' }}>
+                          <div style={{ color: '#94a3b8', fontSize: '0.75rem' }}>Disaster Intensity</div>
+                          <div style={{ color: '#f8fafc', fontWeight: 600 }}>{damagePrediction.disaster_intensity}</div>
+                        </div>
+                        <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: '10px', padding: '0.75rem' }}>
+                          <div style={{ color: '#94a3b8', fontSize: '0.75rem' }}>Avg Severity</div>
+                          <div style={{ color: '#f8fafc', fontWeight: 600 }}>{damagePrediction.summary?.average_severity}%</div>
+                        </div>
+                        <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: '10px', padding: '0.75rem' }}>
+                          <div style={{ color: '#94a3b8', fontSize: '0.75rem' }}>Max Severity</div>
+                          <div style={{ color: '#f8fafc', fontWeight: 600 }}>{damagePrediction.summary?.max_severity}%</div>
+                        </div>
+                        <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: '10px', padding: '0.75rem' }}>
+                          <div style={{ color: '#94a3b8', fontSize: '0.75rem' }}>Avg Confidence</div>
+                          <div style={{ color: '#f8fafc', fontWeight: 600 }}>{damagePrediction.summary?.average_confidence}%</div>
+                        </div>
+                        <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: '10px', padding: '0.75rem' }}>
+                          <div style={{ color: '#94a3b8', fontSize: '0.75rem' }}>Critical Areas</div>
+                          <div style={{ color: '#f8fafc', fontWeight: 600 }}>{damagePrediction.summary?.critical_areas}</div>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
+                        <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '10px', padding: '0.75rem', border: '1px solid rgba(255,255,255,0.08)' }}>
+                          <div style={{ color: '#94a3b8', fontSize: '0.75rem' }}>Most Damaged Area</div>
+                          <div style={{ color: '#f8fafc', fontWeight: 600 }}>{damagePrediction.summary?.top_damage_area || '-'}</div>
+                          <div style={{ color: '#fbbf24', fontSize: '0.8rem', marginTop: '0.2rem' }}>{damagePrediction.summary?.top_damage_severity}% severity</div>
+                        </div>
+                        <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '10px', padding: '0.75rem', border: '1px solid rgba(255,255,255,0.08)' }}>
+                          <div style={{ color: '#94a3b8', fontSize: '0.75rem' }}>Impact Coverage</div>
+                          <div style={{ color: '#f8fafc', fontWeight: 600 }}>
+                            {damagePrediction.summary?.affected_areas || 0} / {damagePrediction.summary?.room_count || 0} areas
+                          </div>
+                          <div style={{ color: '#94a3b8', fontSize: '0.8rem', marginTop: '0.2rem' }}>
+                            {damagePrediction.summary?.room_count
+                              ? `${(((damagePrediction.summary?.affected_areas || 0) / Math.max(1, damagePrediction.summary?.room_count || 1)) * 100).toFixed(1)}% of detected areas have moderate+ impact`
+                              : 'No area impact data'}
+                          </div>
+                        </div>
+                        <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: '10px', padding: '0.75rem', border: '1px solid rgba(255,255,255,0.08)' }}>
+                          <div style={{ color: '#94a3b8', fontSize: '0.75rem' }}>Recommended Priority</div>
+                          <div style={{ color: '#f8fafc', fontWeight: 600 }}>{damagePrediction.summary?.building_risk || 'Unknown'} Response</div>
+                          <div style={{ color: '#94a3b8', fontSize: '0.8rem', marginTop: '0.2rem' }}>
+                            {damagePrediction.summary?.critical_areas > 0
+                              ? `Immediate inspection for ${damagePrediction.summary?.critical_areas} critical area(s)`
+                              : 'Monitor and inspect highest-severity areas first'}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{ maxHeight: '320px', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '10px', background: 'rgba(15,23,42,0.28)' }}>
+                        <div
+                          style={{
+                            position: 'sticky',
+                            top: 0,
+                            zIndex: 2,
+                            display: 'grid',
+                            gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr',
+                            gap: '0.6rem',
+                            padding: '0.65rem 0.8rem',
+                            fontSize: '0.75rem',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.04em',
+                            color: '#94a3b8',
+                            background: 'rgba(15,23,42,0.95)',
+                            borderBottom: '1px solid rgba(255,255,255,0.12)',
+                          }}
+                        >
+                          <div>Room</div>
+                          <div>Area (m²)</div>
+                          <div>Severity</div>
+                          <div>Confidence</div>
+                          <div>Damage Level</div>
+                        </div>
+                        {(damagePrediction.areas || []).map((area: any, idx: number) => {
+                          const severity = Number(area.damage_severity) || 0;
+                          const confidence = Number(area.confidence) || 0;
+                          const sevColor = severityToColor(severity);
+                          return (
+                          <div key={area.name} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', gap: '0.6rem', padding: '0.72rem 0.8rem', borderBottom: '1px solid rgba(255,255,255,0.06)', fontSize: '0.83rem', background: idx % 2 === 0 ? `linear-gradient(90deg, ${sevColor}14 0%, rgba(255,255,255,0) 55%)` : 'rgba(255,255,255,0.01)' }}>
+                            <div style={{ color: '#e2e8f0', fontWeight: 600 }}>{area.name}</div>
+                            <div style={{ color: '#94a3b8' }}>{Number(area.area).toFixed(2)}</div>
+                            <div style={{ color: sevColor, fontWeight: 700 }}>{severity.toFixed(1)}%</div>
+                            <div style={{ color: '#93c5fd', fontWeight: 600 }}>{confidence.toFixed(1)}%</div>
+                            <div style={{ color: '#c4b5fd', fontWeight: 600 }}>{area.damage_class_name}</div>
+                          </div>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
+              {activeTab === 'evacuate' && null}
             </div>
             <div className="bottom-section">
               <div className="viewer-card glass" style={{ height: isFullscreen ? '100%' : '600px' }}>
@@ -451,8 +713,10 @@ export default function Home() {
                        <ThreeViewer 
                         model={modelUrl} 
                         isSimulated={!!simulationData || evacuationPath.length > 0}
-                        onPointSelect={handlePointSelect}
-                        markers={markers}
+                        onPointSelect={isEvacuateTab ? handlePointSelect : undefined}
+                        markers={isEvacuateTab ? markers : []}
+                        damageOverlay={damagePrediction ? { enabled: activeTab === 'damage', roomTypeSeverity } : undefined}
+                        areaLabels={activeTab === 'damage' ? damageAreaLabels : []}
                       />
                       {modelUrl && (
                         <a
@@ -477,6 +741,28 @@ export default function Home() {
                   )}
                 </div>
               </div>
+              {activeTab === 'evacuate' && (
+                <div style={{ marginTop: '1rem' }}>
+                  <p style={{ margin: '0 0 0.5rem 0', color: '#94a3b8', fontSize: '0.88rem' }}>
+                    Note: Click and select an evacuation path start point, then generate the route.
+                  </p>
+                  <button
+                    onClick={handlePathfind}
+                    disabled={!uploadedFilename || isProcessing || targetX === null}
+                    className="btn-primary"
+                    style={{
+                      width: '100%',
+                      padding: '1.2rem 1.5rem',
+                      fontSize: '1.05rem',
+                      fontWeight: 700,
+                      background: '#f97316',
+                      opacity: (!uploadedFilename || isProcessing || targetX === null) ? 0.5 : 1,
+                    }}
+                  >
+                    {isProcessing ? 'Calculating Route...' : 'Generate Evacuation Route'}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         ) : (

@@ -184,14 +184,46 @@ body {
   border: 2px dashed var(--glass-border);
   border-radius: 15px;
   padding: 3rem 2rem;
+  min-height: 360px;
   text-align: center;
   transition: border-color 0.3s;
   cursor: pointer;
   margin-bottom: 2rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
 }
 
 .upload-area:hover {
   border-color: var(--blue-glow);
+}
+
+.upload-preview-frame {
+  width: 100%;
+  height: 420px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.upload-preview-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+}
+
+@media (max-width: 768px) {
+  .upload-area {
+    min-height: 260px;
+    padding: 2rem 1rem;
+  }
+
+  .upload-preview-frame {
+    height: 280px;
+  }
 }
 
 h3 {

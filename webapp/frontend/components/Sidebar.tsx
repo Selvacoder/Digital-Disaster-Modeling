@@ -8,7 +8,7 @@ export default function Sidebar({ isOpen, activeTab, setActiveTab }: {
     activeTab: string,
     setActiveTab: (tab: any) => void
 }) {
-    const isDashboard = ['convert', 'simulate', 'evacuate'].includes(activeTab);
+    const isDashboard = ['convert', 'simulate', 'damage', 'evacuate'].includes(activeTab);
 
     return (
         <aside className={`sidebar ${isOpen ? '' : 'closed'}`}>

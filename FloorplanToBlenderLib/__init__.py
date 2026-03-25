@@ -27,4 +27,7 @@ __all__ = [
     "config",
     "stacking",
     "floorplan",
+    "qlearning_pathfinder",
+    "damage_predictor",
+    "building_analyzer",
 ]

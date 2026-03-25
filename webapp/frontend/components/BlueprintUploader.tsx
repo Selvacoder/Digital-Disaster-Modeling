@@ -37,8 +37,7 @@ export default function BlueprintUploader({ onUpload }: { onUpload: (filename: s
     };
 
     return (
-        <div className="glass" style={{ marginBottom: '2rem' }}>
-            <h3>1. Upload Blueprint</h3>
+        <>
             {!preview ? (
                 <div
                     className={`upload-area ${dragging ? 'dragging' : ''} ${isUploading ? 'opacity-50' : ''}`}
@@ -66,8 +65,13 @@ export default function BlueprintUploader({ onUpload }: { onUpload: (filename: s
                     />
                 </div>
             ) : (
-                <div style={{ position: 'relative' }}>
-                    <img src={preview} alt="Preview" style={{ width: '100%', borderRadius: '12px', display: 'block' }} />
+                <div className="upload-preview-frame" style={{ position: 'relative' }}>
+                    <img
+                        src={preview}
+                        alt="Preview"
+                        className="upload-preview-image"
+                        style={{ borderRadius: '12px', display: 'block' }}
+                    />
                     <button
                         disabled={isUploading}
                         onClick={() => { setPreview(null); onUpload(null); }}
@@ -81,6 +85,6 @@ export default function BlueprintUploader({ onUpload }: { onUpload: (filename: s
                     </button>
                 </div>
             )}
-        </div>
+        </>
     );
 }
