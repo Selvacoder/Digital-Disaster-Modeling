@@ -442,7 +442,7 @@ async def upload_image(file: UploadFile = File(...)):
 @app.post("/convert")
 async def convert_blueprint(
     filename: str = Form(...), 
-    wall_height: float = Form(2.5), 
+    wall_height: float = Form(5.0), 
     pixel_scale: float = Form(100.0),
     generate_walls: bool = Form(True),
     generate_floors: bool = Form(True),

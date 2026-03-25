@@ -8,7 +8,7 @@ import ThreeViewer from '../components/ThreeViewer';
 import { Maximize, Minimize, Cpu, Flame, Navigation, Activity, Play } from 'lucide-react';
 
 const DEFAULT_WALL_HEIGHT = 2.5;
-const DEFAULT_PIXEL_SCALE = 100;
+const DEFAULT_PIXEL_SCALE = 50;
 
 export default function Home() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
