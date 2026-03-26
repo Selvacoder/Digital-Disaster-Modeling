@@ -97,7 +97,7 @@ def get_scene_bounds():
     return min_x, max_x, min_y, max_y
 
 
-def build_navigable_grid(resolution=0.5):
+def build_navigable_grid(resolution=0.5, simulated_mode=False):
     """
     Build a 2D grid marking walkable vs obstacle cells.
     Uses raycasting to detect floor and wall positions accurately.
@@ -128,9 +128,11 @@ def build_navigable_grid(resolution=0.5):
             origin = (wx, wy, 1.0)
             hit, loc, norm, index, obj, matrix = scene.ray_cast(depsgraph, origin, (0, 0, -1))
 
+            floor_z_threshold = 0.22 if simulated_mode else 0.25
+
             if not hit:
                 grid[r][c] = 0          # Outside/void — not walkable
-            elif loc.z <= 0.25:
+            elif loc.z <= floor_z_threshold:
                 grid[r][c] = 1          # Floor level — walkable
             else:
                 grid[r][c] = 2          # Elevated surface — obstacle
@@ -144,13 +146,14 @@ def build_navigable_grid(resolution=0.5):
                     hit_w, loc_w, *_ = scene.ray_cast(
                         depsgraph, origin_wall, (dx, dy, 0), distance=resolution * 0.8)
                     if hit_w:
-                        # Treat near-wall hits as soft obstacle, not hard block,
-                        # to avoid over-blocking after simulation debris appears.
+                        # Keep wall-adjacent cells as soft penalty so narrow simulated
+                        # corridors remain navigable; hard clipping is prevented via
+                        # diagonal corner-cut checks in pathfinding.
                         grid[r][c] = 3
                         break
 
             # --- High-floor / debris override ---
-            if grid[r][c] == 2:
+            if grid[r][c] == 2 and not simulated_mode:
                 origin_high = (wx, wy, 0.4)
                 hit_h, loc_h, *_ = scene.ray_cast(depsgraph, origin_high, (0, 0, -1))
                 if hit_h and loc_h.z <= 0.45:
@@ -164,6 +167,8 @@ def build_navigable_grid(resolution=0.5):
                     for dc in [-1, 0, 1]:
                         nr, nc = r + dr, c + dc
                         if 0 <= nr < rows and 0 <= nc < cols and grid[nr][nc] == 1:
+                            # Preserve narrow passages by using soft inflation even in
+                            # simulated mode; this still discourages wall hugging.
                             grid[nr][nc] = 3
 
     # --- Detect outside-connected void to derive true building exits topologically ---
@@ -261,7 +266,7 @@ def build_navigable_grid(resolution=0.5):
                     if r <= 2 or r >= rows - 3 or c <= 2 or c >= cols - 3:
                         exit_cells.append((r, c))
 
-    return grid, rows, cols, min_x, min_y, resolution, exit_cells
+    return grid, rows, cols, min_x, min_y, resolution, exit_cells, outside_void
 
 
 def find_reachable_exits(grid, rows, cols, start, goals):
@@ -378,6 +383,17 @@ def astar(grid, rows, cols, start, goals):
             if grid[nr][nc] not in (1, 3):
                 continue
 
+            # Prevent diagonal corner-cutting through walls.
+            if dr != 0 and dc != 0:
+                side1 = (cr + dr, cc)
+                side2 = (cr, cc + dc)
+                if not (0 <= side1[0] < rows and 0 <= side1[1] < cols):
+                    continue
+                if not (0 <= side2[0] < rows and 0 <= side2[1] < cols):
+                    continue
+                if grid[side1[0]][side1[1]] not in (1, 3) or grid[side2[0]][side2[1]] not in (1, 3):
+                    continue
+
             move_cost = 1.414 if (dr != 0 and dc != 0) else 1.0
             if grid[nr][nc] == 3:
                 move_cost += 5.0   # Wall-proximity penalty
@@ -440,6 +456,17 @@ def astar_breakout(grid, rows, cols, start, goals):
             if grid[nr][nc] not in (1, 3, 2):
                 continue
 
+            # Prevent diagonal clipping across solid walls in breakout mode.
+            if dr != 0 and dc != 0:
+                side1 = (cr + dr, cc)
+                side2 = (cr, cc + dc)
+                if not (0 <= side1[0] < rows and 0 <= side1[1] < cols):
+                    continue
+                if not (0 <= side2[0] < rows and 0 <= side2[1] < cols):
+                    continue
+                if grid[side1[0]][side1[1]] == 2 or grid[side2[0]][side2[1]] == 2:
+                    continue
+
             move_cost = 1.414 if (dr != 0 and dc != 0) else 1.0
             if grid[nr][nc] == 3:
                 move_cost += 5.0
@@ -461,7 +488,7 @@ def astar_breakout(grid, rows, cols, start, goals):
 class QLearningAgent:
     """Q-Learning agent for grid pathfinding (alternative to A*)."""
     def __init__(self, grid, rows, cols, start, goals,
-                 alpha=0.25, gamma=0.92, epsilon=0.18, safety_map=None, train_starts=None):
+                 alpha=0.25, gamma=0.92, epsilon=0.18, safety_map=None, train_starts=None, initial_q_table=None):
         self.grid    = grid
         self.rows    = rows
         self.cols    = cols
@@ -470,7 +497,7 @@ class QLearningAgent:
         self.alpha   = alpha
         self.gamma   = gamma
         self.epsilon = epsilon
-        self.q_table = {}
+        self.q_table = initial_q_table if initial_q_table is not None else {}
         self.actions = [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1)]
         self.safety_map = safety_map if safety_map is not None else [[0.5] * cols for _ in range(rows)]
         self.train_starts = list(train_starts) if train_starts else [start]
@@ -520,12 +547,14 @@ class QLearningAgent:
         return legal
 
     def train(self, episodes=5000):
-        print(f"ML STATUS: Q-Learning training for {episodes} episodes…")
+        max_steps = min(700, max(180, (self.rows + self.cols) * 3))
+        success_streak = 0
         for ep in range(episodes):
             state = self.start if random.random() < 0.35 else random.choice(self.train_starts)
             steps = 0
             visited_ep = {state}
-            while state not in self.goals and steps < 1200:
+            reached_goal = False
+            while state not in self.goals and steps < max_steps:
                 idx = self.choose_action(state)
                 if idx is None:
                     break
@@ -553,11 +582,19 @@ class QLearningAgent:
                 steps += 1
                 visited_ep.add(state)
 
-            self.epsilon = max(0.02, self.epsilon * 0.99992)
-            if ep % 1000 == 0:
-                print(f"ML STATUS: {ep}/{episodes} episodes…")
+                if state in self.goals:
+                    reached_goal = True
+                    break
 
-        print("ML STATUS: Training done. Extracting path.")
+            self.epsilon = max(0.02, self.epsilon * 0.99992)
+            if reached_goal:
+                success_streak += 1
+            else:
+                success_streak = 0
+
+            # Early stop when policy converges consistently.
+            if ep >= 800 and success_streak >= 20:
+                break
 
     def get_optimal_path(self):
         state   = self.start
@@ -694,6 +731,244 @@ def pick_best_reachable_toward_exits(reachable_set, exit_cells, start_cell):
     return min(reachable_set, key=score)
 
 
+def extend_path_outside(path_cells, outside_void, steps=2):
+    """
+    Extend a finished route into outside-connected void cells so the visual path
+    clearly exits the building envelope.
+    """
+    if not path_cells or not outside_void:
+        return path_cells
+
+    extended = list(path_cells)
+    end_r, end_c = extended[-1]
+
+    # Choose an adjacent outside-connected void cell as the breakout direction.
+    best_void = None
+    best_score = float("-inf")
+    prev = extended[-2] if len(extended) > 1 else None
+    for dr in (-1, 0, 1):
+        for dc in (-1, 0, 1):
+            if dr == 0 and dc == 0:
+                continue
+            nr, nc = end_r + dr, end_c + dc
+            if (nr, nc) not in outside_void:
+                continue
+
+            # Prefer continuing in the same direction as the last route segment.
+            continuity = 0.0
+            if prev is not None:
+                continuity = dr * (end_r - prev[0]) + dc * (end_c - prev[1])
+            if continuity > best_score:
+                best_score = continuity
+                best_void = (nr, nc)
+
+    if best_void is None:
+        return extended
+
+    extended.append(best_void)
+
+    # Push further outside to make endpoint visibly beyond the wall envelope.
+    curr = best_void
+    for _ in range(max(0, steps - 1)):
+        candidates = []
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                nr, nc = curr[0] + dr, curr[1] + dc
+                if (nr, nc) in outside_void and (nr, nc) not in extended:
+                    candidates.append((nr, nc))
+
+        if not candidates:
+            break
+
+        # Move farther from the original route end so the marker is clearly outside.
+        nxt = max(candidates, key=lambda rc: abs(rc[0] - end_r) + abs(rc[1] - end_c))
+        extended.append(nxt)
+        curr = nxt
+
+    return extended
+
+
+def build_virtual_outside_line(grid, rows, cols, outside_void, margin_cells=3):
+    """
+    Build an imaginary outside line at a fixed void-distance from the model edge.
+    The line is represented as outside_void cells whose BFS distance from the
+    outside cells touching the model envelope equals margin_cells.
+    """
+    if not outside_void:
+        return set()
+
+    edge_void = set()
+    for r, c in outside_void:
+        touches_model = False
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < rows and 0 <= nc < cols and grid[nr][nc] in (1, 2, 3):
+                    touches_model = True
+                    break
+            if touches_model:
+                break
+        if touches_model:
+            edge_void.add((r, c))
+
+    if not edge_void:
+        return set()
+
+    dist = {}
+    q = deque()
+    for cell in edge_void:
+        dist[cell] = 0
+        q.append(cell)
+
+    while q:
+        r, c = q.popleft()
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                nr, nc = r + dr, c + dc
+                nxt = (nr, nc)
+                if nxt in outside_void and nxt not in dist:
+                    dist[nxt] = dist[(r, c)] + 1
+                    q.append(nxt)
+
+    line = {cell for cell, d in dist.items() if d == max(1, margin_cells)}
+    if not line:
+        line = {cell for cell, d in dist.items() if d >= 1}
+    return line
+
+
+def compute_void_distance_to_line(outside_void, line_cells):
+    """Multi-source BFS distance map from any outside-void cell to virtual line."""
+    if not outside_void or not line_cells:
+        return {}
+
+    dist = {}
+    q = deque()
+    for cell in line_cells:
+        if cell in outside_void:
+            dist[cell] = 0
+            q.append(cell)
+
+    while q:
+        r, c = q.popleft()
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                nxt = (r + dr, c + dc)
+                if nxt in outside_void and nxt not in dist:
+                    dist[nxt] = dist[(r, c)] + 1
+                    q.append(nxt)
+    return dist
+
+
+def extend_path_to_virtual_line(path_cells, outside_void, line_cells, max_steps=60):
+    """
+    Extend route through outside void until the imaginary outside line is touched.
+    """
+    if not path_cells or not outside_void:
+        return path_cells
+    if not line_cells:
+        return extend_path_outside(path_cells, outside_void, steps=3)
+
+    dist_to_line = compute_void_distance_to_line(outside_void, line_cells)
+    if not dist_to_line:
+        return extend_path_outside(path_cells, outside_void, steps=3)
+
+    extended = list(path_cells)
+    end = extended[-1]
+
+    # Step from route end to best adjacent outside-void cell.
+    neighbors = []
+    for dr in (-1, 0, 1):
+        for dc in (-1, 0, 1):
+            if dr == 0 and dc == 0:
+                continue
+            nxt = (end[0] + dr, end[1] + dc)
+            if nxt in outside_void:
+                neighbors.append(nxt)
+
+    if not neighbors:
+        return extended
+
+    curr = min(neighbors, key=lambda rc: dist_to_line.get(rc, 10**9))
+    extended.append(curr)
+    visited_void = {curr}
+
+    steps = 0
+    while steps < max_steps and dist_to_line.get(curr, 10**9) > 0:
+        cand = []
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                nxt = (curr[0] + dr, curr[1] + dc)
+                if nxt in outside_void and nxt not in visited_void:
+                    cand.append(nxt)
+
+        if not cand:
+            break
+
+        curr = min(cand, key=lambda rc: dist_to_line.get(rc, 10**9))
+        extended.append(curr)
+        visited_void.add(curr)
+        steps += 1
+
+    return extended
+
+
+def is_adjacent_to_outside(cell, outside_void):
+    """Return True when a walkable cell touches outside-connected void."""
+    r, c = cell
+    for dr in (-1, 0, 1):
+        for dc in (-1, 0, 1):
+            if dr == 0 and dc == 0:
+                continue
+            if (r + dr, c + dc) in outside_void:
+                return True
+    return False
+
+
+def find_outside_edge_cells(grid, rows, cols, outside_void):
+    """Collect all walkable cells that border outside-connected void."""
+    edge_cells = []
+    for r in range(rows):
+        for c in range(cols):
+            if grid[r][c] in (1, 3) and is_adjacent_to_outside((r, c), outside_void):
+                edge_cells.append((r, c))
+    return edge_cells
+
+
+def ensure_path_reaches_outside_edge(path_cells, grid, rows, cols, outside_void):
+    """
+    Ensure route touches a true outside edge. If not, connect from current end
+    to nearest outside-edge walkable cell.
+    """
+    if not path_cells or not outside_void:
+        return path_cells
+
+    end = path_cells[-1]
+    if is_adjacent_to_outside(end, outside_void):
+        return path_cells
+
+    edge_cells = find_outside_edge_cells(grid, rows, cols, outside_void)
+    if not edge_cells:
+        return path_cells
+
+    connector = astar(grid, rows, cols, end, edge_cells)
+    if not path_reaches_goal(connector, edge_cells):
+        connector = astar_breakout(grid, rows, cols, end, edge_cells)
+
+    if connector and len(connector) >= 2:
+        return path_cells + connector[1:]
+    return path_cells
+
+
 # ---------------------------------------------------------------------------
 # Path optimisation & smoothing
 # ---------------------------------------------------------------------------
@@ -759,6 +1034,57 @@ def smooth_path_coords(coords, passes=3):
     return pts
 
 
+def improve_path_clearance(path_cells, grid, rows, cols, safety_map):
+    """
+    Nudge interior path cells away from walls while preserving connectivity.
+    This reduces visual wall-touching without changing start/end targets.
+    """
+    if not path_cells or len(path_cells) < 3:
+        return path_cells
+
+    adjusted = list(path_cells)
+
+    for i in range(1, len(adjusted) - 1):
+        r, c = adjusted[i]
+        if not (0 <= r < rows and 0 <= c < cols):
+            continue
+
+        prev_rc = adjusted[i - 1]
+        next_rc = adjusted[i + 1]
+
+        # Only adjust risky near-wall cells.
+        if grid[r][c] != 3:
+            continue
+
+        best = (r, c)
+        best_score = safety_map[r][c]
+
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                nr, nc = r + dr, c + dc
+                if not (0 <= nr < rows and 0 <= nc < cols):
+                    continue
+                if grid[nr][nc] not in (1, 3):
+                    continue
+
+                # Keep local connectivity to avoid introducing kinks or jumps.
+                if abs(nr - prev_rc[0]) > 1 or abs(nc - prev_rc[1]) > 1:
+                    continue
+                if abs(nr - next_rc[0]) > 1 or abs(nc - next_rc[1]) > 1:
+                    continue
+
+                # Prefer safer cells and slight centerline continuity.
+                continuity_penalty = abs((prev_rc[0] + next_rc[0]) - 2 * nr) + abs((prev_rc[1] + next_rc[1]) - 2 * nc)
+                score = safety_map[nr][nc] - 0.03 * continuity_penalty
+                if score > best_score:
+                    best_score = score
+                    best = (nr, nc)
+
+        adjusted[i] = best
+
+    return adjusted
+
+
 # ---------------------------------------------------------------------------
 # Blender object creation
 # ---------------------------------------------------------------------------
@@ -773,7 +1099,7 @@ def create_path_visualization(path_world_coords, path_mat):
 
     curve_data              = bpy.data.curves.new(name="EvacPath", type='CURVE')
     curve_data.dimensions   = '3D'
-    curve_data.bevel_depth  = 0.12       # Tube radius
+    curve_data.bevel_depth  = 0.08       # Thinner tube reduces wall overlap artifacts
     curve_data.bevel_resolution = 6
 
     spline = curve_data.splines.new('NURBS')
@@ -831,7 +1157,6 @@ def export_glb(output_path):
             export_materials='EXPORT',
             export_colors=True,
         )
-        print(f"Exported GLB to: {output_path}")
     except Exception as e:
         print(f"Export failed: {e}")
 
@@ -853,6 +1178,7 @@ def main():
     dest_x      = params["dest_x"]
     dest_y      = params["dest_y"]
     algo        = params.get("algo", "astar")
+    simulated_mode = "_simulated" in os.path.basename(blend_path).lower()
 
     # --- Load scene ---
     if blend_path.lower().endswith('.glb'):
@@ -869,8 +1195,8 @@ def main():
     chosen = None
 
     for res in resolution_candidates:
-        trial_grid, trial_rows, trial_cols, trial_min_x, trial_min_y, trial_resolution, trial_exits = \
-            build_navigable_grid(resolution=res)
+        trial_grid, trial_rows, trial_cols, trial_min_x, trial_min_y, trial_resolution, trial_exits, trial_outside_void = \
+            build_navigable_grid(resolution=res, simulated_mode=simulated_mode)
 
         trial_start = choose_best_start_candidate(
             trial_grid,
@@ -897,13 +1223,6 @@ def main():
         )
 
         trial_score = len(trial_reachable_goals) * 100000 + len(trial_reachable_set)
-        print(
-            "DEBUG: Grid trial",
-            f"res={trial_resolution}",
-            f"start=({trial_start_r},{trial_start_c})",
-            f"reachable_exits={len(trial_reachable_goals)}",
-            f"reachable_cells={len(trial_reachable_set)}",
-        )
 
         if chosen is None or trial_score > chosen["score"]:
             chosen = {
@@ -920,6 +1239,7 @@ def main():
                 "reachable_goals": trial_reachable_goals,
                 "reachable_set": trial_reachable_set,
                 "start_world": trial_start["world"],
+                "outside_void": trial_outside_void,
             }
 
         # Early stop when a healthy configuration is found.
@@ -935,16 +1255,9 @@ def main():
     start_r = chosen["start_r"]
     start_c = chosen["start_c"]
     exit_cells = chosen["exit_cells"]
+    outside_void = chosen["outside_void"]
     reachable_goals = chosen["reachable_goals"]
     reachable_set = chosen["reachable_set"]
-
-    print(
-        "DEBUG: Start candidate chosen",
-        f"world={chosen['start_world']} grid=({start_r}, {start_c})",
-        f"reachable_exits={len(reachable_goals)}",
-        f"reachable_cells={len(reachable_set)}",
-        f"grid_res={resolution}",
-    )
 
     is_trapped  = False
     route_mode = algo
@@ -972,9 +1285,19 @@ def main():
         baseline_astar = astar(grid, rows, cols, (start_r, start_c), final_goals)
         baseline_ok = path_reaches_goal(baseline_astar, final_goals)
         safety_map = build_safety_map(grid, rows, cols)
-        train_starts = list(reachable_set) if reachable_set else [(start_r, start_c)]
-        attempts = [30000, 42000, 56000]
+        if reachable_set:
+            starts_pool = list(reachable_set)
+            if len(starts_pool) > 900:
+                starts_pool = random.sample(starts_pool, 900)
+            train_starts = starts_pool
+        else:
+            train_starts = [(start_r, start_c)]
+
+        complexity = max(1, len(train_starts))
+        base_episodes = min(10000, max(2500, int(120 * math.sqrt(complexity))))
+        attempts = [base_episodes, int(base_episodes * 1.35)]
         path_cells = [(start_r, start_c)]
+        q_seed = None
         for idx, episodes in enumerate(attempts):
             agent = QLearningAgent(
                 grid,
@@ -985,8 +1308,10 @@ def main():
                 safety_map=safety_map,
                 train_starts=train_starts,
                 epsilon=0.22 if idx > 0 else 0.18,
+                initial_q_table=q_seed,
             )
             agent.train(episodes=episodes)
+            q_seed = agent.q_table
             candidate_path = agent.get_optimal_path()
             if len(candidate_path) > len(path_cells):
                 path_cells = candidate_path
@@ -1000,14 +1325,12 @@ def main():
             q_cost = path_cost(grid, path_cells)
             a_cost = path_cost(grid, baseline_astar)
             if (not q_ok) or len(path_cells) < 3 or q_cost > 1.12 * a_cost or q_cost < 0.35 * a_cost:
-                print("ML STATUS: Using A* shortest route (Q-learning not reliable for this map).")
                 path_cells = baseline_astar
                 q_ok = True
                 route_mode = "astar_shortest_fallback"
                 fallback_used = True
 
         if not q_ok:
-            print("ML STATUS: Q-learning could not reach an exit; trying deterministic rescue fallback.")
             rescue_path = astar(grid, rows, cols, (start_r, start_c), final_goals)
             if rescue_path and len(rescue_path) > len(path_cells):
                 path_cells = rescue_path
@@ -1019,14 +1342,21 @@ def main():
                 nearest_goal = min(final_goals, key=lambda g: abs(g[0] - start_r) + abs(g[1] - start_c))
                 if nearest_goal != (start_r, start_c):
                     path_cells = [(start_r, start_c), nearest_goal]
-            print(f"ML STATUS: Rescue path length = {len(path_cells)}")
     else:
         # Keep for backward compatibility when explicit API requests astar.
         path_cells = astar(grid, rows, cols, (start_r, start_c), final_goals)
         route_mode = "astar"
 
-    print(f"DEBUG: Raw path length = {len(path_cells)}")
-    print(f"DEBUG: start={path_cells[:1]}  end={path_cells[-1:]}  trapped={is_trapped}")
+    # Improve wall clearance before any geometric smoothing/visualization.
+    clearance_map = build_safety_map(grid, rows, cols)
+    path_cells = improve_path_clearance(path_cells, grid, rows, cols, clearance_map)
+
+    # If route ended inside, force-connect to nearest true outside edge first.
+    path_cells = ensure_path_reaches_outside_edge(path_cells, grid, rows, cols, outside_void)
+
+    # Touch an imaginary outside line (ring) for robust and consistent endpoint.
+    virtual_line = build_virtual_outside_line(grid, rows, cols, outside_void, margin_cells=3)
+    path_cells = extend_path_to_virtual_line(path_cells, outside_void, virtual_line, max_steps=60)
 
     # --- Optimise & smooth ---
     # For Q-learning safety mode, avoid aggressive LOS shortcutting.
@@ -1034,7 +1364,7 @@ def main():
     path_height     = 0.35
     path_world      = [(min_x + c*resolution, min_y + r*resolution, path_height)
                        for r, c in optimized_cells]
-    path_world      = smooth_path_coords(path_world, passes=1 if algo == "qlearning" else 3)
+    path_world      = smooth_path_coords(path_world, passes=0 if algo == "qlearning" else 2)
 
     # --- Choose materials based on trapped state ---
     if is_trapped:
@@ -1069,6 +1399,9 @@ def main():
                     "chosen_grid_resolution": resolution,
                     "start_cell": [start_r, start_c],
                     "end_cell": list(path_cells[-1]) if path_cells else [start_r, start_c],
+                    "outside_extended": bool(path_cells and path_cells[-1] in outside_void),
+                    "virtual_line_cells": len(virtual_line),
+                    "simulated_mode": simulated_mode,
                 },
                 f,
                 indent=2,
