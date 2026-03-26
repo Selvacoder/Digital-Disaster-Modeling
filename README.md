@@ -64,6 +64,37 @@ Top-level folders/files commonly used in development:
 - Node.js 18+
 - Blender installed and accessible from system path or configured path
 
+## Docker Setup (Recommended)
+
+Run the full stack (backend + frontend + Blender-enabled backend container):
+
+```bash
+docker compose up --build
+```
+
+Access:
+
+- Frontend: http://localhost:3000
+- Backend API docs: http://localhost:8000/docs
+
+Run in detached mode:
+
+```bash
+docker compose up -d --build
+```
+
+Stop containers:
+
+```bash
+docker compose down
+```
+
+Persistent output folders are mounted from the host:
+
+- `Target/` -> generated models
+- `Images/Uploads/` -> uploaded blueprints
+- `Models/` -> ML/pathfinding artifacts
+
 ## Setup
 
 ### 1) Clone repository
