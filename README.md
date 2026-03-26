@@ -1,83 +1,186 @@
-# 2D Blueprint to 3D Model Converter 🏠📐➡️🏗️
+# 2D Blueprint to 3D Model
 
-Convert your 2D architectural blueprints into stunning 3D models with ease!
+This project converts 2D floorplans into 3D building models, supports disaster simulation, predicts damage severity, and generates evacuation routes with Blender-based pathfinding.
 
-## 🏆 Smart India Hackathon (SIH) Project
+## Project Overview
 
-This project was developed as part of the Smart India Hackathon (SIH), a nationwide initiative to provide students with a platform to solve some of the pressing problems we face in our daily lives, and thus inculcate a culture of product innovation and a mindset of problem-solving.
+The repository includes a complete pipeline:
 
-### Our SIH Journey
+1. Upload a blueprint image
+2. Convert it into a 3D model
+3. Run disaster simulation (fire, flood, earthquake)
+4. Predict damage severity per area
+5. Generate evacuation path and export an evacuated model
 
-- **Problem Statement**: We addressed the challenge of efficiently converting 2D architectural blueprints into 3D models, a task that traditionally requires significant time and expertise.
-- **Innovation**: Our solution leverages advanced computer vision and machine learning techniques to automate the conversion process, making it faster and more accessible.
-- **Impact**: This tool has the potential to revolutionize architectural visualization, urban planning, and construction processes across India.
+Core components:
 
-We're proud to have developed this solution as part of SIH, contributing to the technological advancement of our nation.
+- FastAPI backend for orchestration and APIs
+- Next.js frontend for interactive workflow and 3D preview
+- Blender scripts for model processing and route generation
+- Floorplan processing library for geometry and analysis
 
-## 🌟 Features
+## Main Features
 
-- **Accurate Conversion**: Transform 2D blueprints into precise 3D models
-- **Multiple Input Formats**: Support for various 2D blueprint file types
-- **Customizable Output**: Generate 3D models in popular formats like OBJ, FBX, and GLTF
-- **Texture Mapping**: Automatically apply textures for a realistic finish
-- **Cloud Processing**: Leverage cloud resources for faster processing of large blueprints
-## 🌐 Online Demo
+- Blueprint to 3D conversion
+- Simulation-aware model processing
+- Damage prediction with severity summary
+- Evacuation route generation with:
+   - Reachable-exit detection
+   - Outside-connected void handling
+   - Simulated-mode routing safeguards
+   - Diagonal corner-cut prevention in fallback search
+   - Route diagnostics metadata output
 
-Try our tool without installation! Visit our [Online Demo](demovideo) to see it in action.
+## Repository Structure
 
-## 🚀 Quick Start
+Top-level folders/files commonly used in development:
 
-1. **Clone the repository**
-   ```
-   git clone https://github.com/jayant1554/2d_blueprint_to_3d_model.git
-   cd 2d_blueprint_to_3d_model
-   ```
+- Blender/
+   - Blender automation scripts including evacuation pathfinding
+- FloorplanToBlenderLib/
+   - Core floorplan parsing, transformation, and generation logic
+- webapp/backend/
+   - FastAPI backend service and API endpoints
+- webapp/frontend/
+   - Next.js frontend application
+- Data/
+   - Processed/intermediate data assets
+- Target/
+   - Generated output models and artifacts
+- Models/
+   - Model and q-table related artifacts
 
-2. **Set up the environment**
-   ```
-   python -m venv venv
-   source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
-   pip install -r requirements.txt
-   ```
+## Tech Stack
 
-3. **Run the conversion script**
-   ```
-   python convert.py path/to/your/blueprint.jpg
-   ```
+- Python, FastAPI, Uvicorn
+- Blender Python API (bpy)
+- Next.js, React, TypeScript
+- NumPy/OpenCV and related Python ecosystem packages
 
-4. **Find your 3D model in the `output` directory**
+## Prerequisites
 
-## 📋 Prerequisites
+- Windows environment (recommended for current scripts)
+- Python 3.10+
+- Node.js 18+
+- Blender installed and accessible from system path or configured path
 
-- Python 3.7+
-- OpenCV
-- NumPy
-- Blender (for 3D model generation)
+## Setup
 
-## 🛠️ Installation
+### 1) Clone repository
 
-Detailed installation instructions can be found in our [Installation Guide](docs/INSTALL.md).
+```bash
+git clone https://github.com/jayant1554/2d_blueprint_to_3d_model.git
+cd 2d_blueprint_to_3d_model
+```
 
-## 🤝 Contributing
+### 2) Python environment
 
-We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for more details.
+```bash
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+```
 
-## 📄 License
+### 3) Frontend dependencies
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+```bash
+cd webapp/frontend
+npm install
+cd ../..
+```
 
-## 🙏 Acknowledgments
+## Running the Project
 
-- Thanks to all contributors who have helped shape this project
-- Special thanks to [OpenCV](https://opencv.org/) and [Blender](https://www.blender.org/) for their amazing tools
-- Gratitude to the Smart India Hackathon organizers for providing this opportunity
+### Backend
 
-## 📞 Contact
+```bash
+uvicorn webapp.backend.main:app --host 0.0.0.0 --port 8000 --reload
+```
 
-Jayant - [jayant1554@github.com](mailto:jayant1554@github.com)
+### Frontend
 
-Project Link: [https://github.com/jayant1554/2d_blueprint_to_3d_model](https://github.com/jayant1554/2d_blueprint_to_3d_model)
+```bash
+cd webapp/frontend
+npm run dev
+```
 
----
+### Access
 
-⭐️ If you find this project useful, please consider giving it a star!
+- Frontend: http://localhost:3000
+- Backend docs: http://localhost:8000/docs
+
+## User Workflow
+
+1. Open frontend UI
+2. Upload blueprint
+3. Convert to 3D model
+4. Optionally run simulation
+5. Run damage prediction
+6. Go to evacuation and select start point
+7. Generate evacuation route and review exported result
+
+## API Endpoints (Core)
+
+- POST /convert
+- POST /simulate
+- POST /damage-predict
+- POST /pathfind
+- GET /history
+
+## Pathfinding Behavior Notes
+
+- Q-learning path generation is available for learned routing behavior.
+- Deterministic fallback is used when Q-learning output is unreliable.
+- Simulated model inputs are detected and handled with tuned grid behavior.
+- Outside completion logic helps routes end visibly outside the building envelope.
+- Diagnostics are written next to output model as `.pathmeta.json`.
+
+## Performance Notes
+
+- Current tabular Q-learning implementation is CPU-bound Python logic.
+- It does not fully utilize GPU hardware by default.
+- Runtime improvements already integrated include:
+   - Adaptive episode sizing
+   - Early convergence stop
+   - Retry warm-start with retained Q-table
+
+## Troubleshooting
+
+### bpy unresolved in editor
+
+If static analysis reports unresolved import for `bpy`, this is expected outside Blender runtime.
+
+### Path intersects wall after simulation
+
+- Ensure latest pathfinding script changes are present in Blender evacuation script.
+- Verify simulated-mode inputs are being used when expected.
+
+### Pathfinding takes too long
+
+- Use deterministic route mode where learning is not required.
+- Reduce simulation complexity and verify environment resources.
+
+### Stale generated models
+
+- Check output files in Target/ and rerun conversion/simulation as needed.
+
+## Documentation Files
+
+Additional generated documentation in this repo:
+
+- README_PUBLIC.md
+- README_DEVELOPER.md
+
+## Contributing
+
+Contributions are welcome.
+
+1. Create a feature branch
+2. Keep commits focused and scoped
+3. Open a pull request with clear test notes
+
+See CONTRIBUTING.md for contribution guidance.
+
+## License
+
+MIT License. See LICENSE for details.
