@@ -2,7 +2,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from typing import Optional
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from subprocess import check_output, CalledProcessError
+from subprocess import check_output, CalledProcessError, run
 import shutil
 import os
 import sys
@@ -364,6 +364,42 @@ def get_blender_path():
     
     return shutil.which("blender")
 
+
+def _trim_cli_output(output, max_chars=3000):
+    if not output:
+        return ""
+    text = output.strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n... (truncated)"
+
+
+def run_blender_command(cmd, operation_name, output_path=None, min_output_bytes=1):
+    """Run a Blender CLI command and raise a descriptive error on failure."""
+    result = run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        stderr = _trim_cli_output(result.stderr)
+        stdout = _trim_cli_output(result.stdout)
+        details = []
+        if stderr:
+            details.append(f"stderr:\n{stderr}")
+        if stdout:
+            details.append(f"stdout:\n{stdout}")
+        detail_text = "\n\n".join(details) if details else "No CLI output captured."
+        raise RuntimeError(
+            f"{operation_name} failed (exit code {result.returncode}).\n{detail_text}"
+        )
+
+    if output_path:
+        if not os.path.exists(output_path):
+            raise RuntimeError(f"{operation_name} failed: output file not found: {output_path}")
+        if os.path.getsize(output_path) < min_output_bytes:
+            raise RuntimeError(
+                f"{operation_name} failed: output file is too small ({os.path.getsize(output_path)} bytes): {output_path}"
+            )
+
+    return result
+
 def create_blender_project(data_paths, target_folder_name, wall_height):
     blender_install_path = get_blender_path()
     if not blender_install_path:
@@ -387,38 +423,45 @@ def create_blender_project(data_paths, target_folder_name, wall_height):
         const.WALL_HEIGHT = wall_height
 
         # 1. Create .blend project
-        check_output(
+        run_blender_command(
             [
                 blender_install_path,
                 "-noaudio",
                 "--background",
                 "--python",
                 blender_script_path,
+                "--",
                 program_path,
                 target_path_rel,
             ]
-            + data_paths
+            + data_paths,
+            operation_name="Blend project generation",
+            output_path=target_path_abs,
+            min_output_bytes=1,
         )
         
         # 2. Export to GLB for web viewing
         glb_path_abs = target_base_abs + ".glb"
-        check_output(
+        run_blender_command(
             [
                 blender_install_path,
                 "-noaudio",
                 "--background",
                 "--python",
                 os.path.join(program_path, "Blender/blender_export_any.py"),
+                "--",
                 target_path_abs,
                 ".glb",
                 glb_path_abs
-            ]
+            ],
+            operation_name="GLB export",
+            output_path=glb_path_abs,
+            min_output_bytes=1024,
         )
         
         return glb_path_abs
-    except CalledProcessError as e:
-        print(f"Blender error: {e.output.decode() if e.output else str(e)}")
-        raise e
+    except Exception as e:
+        raise RuntimeError(f"3D model creation failed: {e}") from e
 
 @app.get("/")
 async def root():
@@ -548,6 +591,13 @@ async def simulate_disaster(
     
     output_obj = os.path.join(TARGET_DIR, f"{unique_id}_simulated.glb")
     script_path = os.path.join(ROOT_DIR, "Blender", "blender_simulate_disaster.py")
+
+    allowed_disaster_types = {"fire", "flood", "earthquake"}
+    if disaster_type not in allowed_disaster_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid disaster_type '{disaster_type}'. Allowed: {sorted(allowed_disaster_types)}",
+        )
     
     # Build CLI args for the simulation script
     extra_args = []
@@ -579,14 +629,13 @@ async def simulate_disaster(
             disaster_type,
         ] + extra_args
         
-        check_output(cmd)
-        
-        # Verify the file was created
-        if not os.path.exists(output_obj):
-            raise Exception("Blender script finished but simulated model was not created.")
+        run_blender_command(
+            cmd,
+            operation_name="Disaster simulation",
+            output_path=output_obj,
+            min_output_bytes=1024,
+        )
         file_size = os.path.getsize(output_obj)
-        if file_size < 1024:
-            raise Exception("Simulated model export is invalid (file too small).")
         
         import time
         cache_buster = int(time.time())
@@ -599,14 +648,10 @@ async def simulate_disaster(
                 "size_bytes": file_size,
             },
         }
-    except CalledProcessError as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Simulation failed: {str(e)}")
     except Exception as e:
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Simulation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Simulation failed: {str(e)}")
 
 
 @app.post("/damage-predict")
@@ -632,107 +677,121 @@ async def predict_building_damage(
     if not os.path.exists(blend_path):
         raise HTTPException(status_code=404, detail="3D model not found. Please convert the blueprint first.")
 
-    intensity = (
-        float(disaster_intensity)
-        if disaster_intensity is not None
-        else infer_disaster_intensity(
-            disaster_type,
-            wind_speed,
-            ambient_temp,
-            water_level,
-            rainfall_rate,
-            magnitude,
-            depth,
-        )
-    )
-    intensity = max(0.0, min(100.0, intensity))
-
-    total_area = max(20.0, total_area)
-    room_count = max(1, min(40, room_count))
-    fragility_index = max(0.1, min(1.0, fragility_index))
-    wall_quality = max(0.1, min(1.0, wall_quality))
-
-    predictor = get_damage_predictor()
-    area_profiles = build_area_profiles_from_real_model(filename)
-    using_real_model_areas = len(area_profiles) > 0
-    if not using_real_model_areas:
-        area_profiles = build_area_profiles(total_area, room_count)
-
-    predictions = []
-    for area in area_profiles:
-        pred = predictor.predict_damage(
-            area_width=area["width"],
-            area_depth=area["depth"],
-            area_height=area["height"],
-            building_material=building_material,
-            distance_to_epicenter=area["distance"],
-            fragility_index=fragility_index,
-            wall_quality=wall_quality,
-            num_openings=area["openings"],
-            disaster_type=disaster_type,
-            disaster_intensity=intensity,
-        )
-        predictions.append(
-            {
-                "name": area["name"],
-                "area": round(area["area"], 2),
-                "preview_x": round(float(area.get("preview_x", 0.0)), 3),
-                "preview_z": round(float(area.get("preview_z", 0.0)), 3),
-                "damage_class": pred["damage_class"],
-                "damage_class_name": pred["damage_class_name"],
-                "damage_severity": round(pred["damage_severity"], 2),
-                "confidence": compute_prediction_confidence(
-                    pred["class_probabilities"],
-                    pred["damage_severity"],
-                    intensity,
-                ),
-                "risk_level": pred["risk_level"],
-                "class_probabilities": pred["class_probabilities"],
-            }
+    allowed_disaster_types = {"fire", "flood", "earthquake", "wind", "other"}
+    if disaster_type not in allowed_disaster_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid disaster_type '{disaster_type}'. Allowed: {sorted(allowed_disaster_types)}",
         )
 
-    severities = [p["damage_severity"] for p in predictions]
-    avg_severity = (sum(severities) / len(severities)) if severities else 0.0
-    max_severity = max(severities) if severities else 0.0
-    detected_total_area = sum(p["area"] for p in area_profiles) if area_profiles else total_area
-    detected_room_count = len(area_profiles) if area_profiles else room_count
+    try:
+        intensity = (
+            float(disaster_intensity)
+            if disaster_intensity is not None
+            else infer_disaster_intensity(
+                disaster_type,
+                wind_speed,
+                ambient_temp,
+                water_level,
+                rainfall_rate,
+                magnitude,
+                depth,
+            )
+        )
+        intensity = max(0.0, min(100.0, intensity))
 
-    class_counts = {"No Damage": 0, "Minor": 0, "Moderate": 0, "Severe": 0, "Catastrophic": 0}
-    for p in predictions:
-        if p["damage_class_name"] in class_counts:
-            class_counts[p["damage_class_name"]] += 1
+        total_area = max(20.0, total_area)
+        room_count = max(1, min(40, room_count))
+        fragility_index = max(0.1, min(1.0, fragility_index))
+        wall_quality = max(0.1, min(1.0, wall_quality))
 
-    confidences = [p["confidence"] for p in predictions if "confidence" in p]
-    avg_confidence = (sum(confidences) / len(confidences)) if confidences else 0.0
-    severe_or_above = class_counts["Severe"] + class_counts["Catastrophic"]
-    moderate_or_above = severe_or_above + class_counts["Moderate"]
-    top_damage_area = max(predictions, key=lambda p: p["damage_severity"]) if predictions else None
+        predictor = get_damage_predictor()
+        area_profiles = build_area_profiles_from_real_model(filename)
+        using_real_model_areas = len(area_profiles) > 0
+        if not using_real_model_areas:
+            area_profiles = build_area_profiles(total_area, room_count)
 
-    model_info = predictor.get_model_info()
+        predictions = []
+        for area in area_profiles:
+            pred = predictor.predict_damage(
+                area_width=area["width"],
+                area_depth=area["depth"],
+                area_height=area["height"],
+                building_material=building_material,
+                distance_to_epicenter=area["distance"],
+                fragility_index=fragility_index,
+                wall_quality=wall_quality,
+                num_openings=area["openings"],
+                disaster_type=disaster_type,
+                disaster_intensity=intensity,
+            )
+            predictions.append(
+                {
+                    "name": area["name"],
+                    "area": round(area["area"], 2),
+                    "preview_x": round(float(area.get("preview_x", 0.0)), 3),
+                    "preview_z": round(float(area.get("preview_z", 0.0)), 3),
+                    "damage_class": pred["damage_class"],
+                    "damage_class_name": pred["damage_class_name"],
+                    "damage_severity": round(pred["damage_severity"], 2),
+                    "confidence": compute_prediction_confidence(
+                        pred["class_probabilities"],
+                        pred["damage_severity"],
+                        intensity,
+                    ),
+                    "risk_level": pred["risk_level"],
+                    "class_probabilities": pred["class_probabilities"],
+                }
+            )
 
-    return {
-        "status": "success",
-        "filename": filename,
-        "disaster_type": disaster_type,
-        "disaster_intensity": round(intensity, 2),
-        "summary": {
-            "total_area": round(detected_total_area, 2),
-            "room_count": detected_room_count,
-            "average_severity": round(avg_severity, 2),
-            "max_severity": round(max_severity, 2),
-            "class_counts": class_counts,
-            "building_risk": predictor._get_risk_level(avg_severity),
-            "areas_source": "real_model" if using_real_model_areas else "fallback_profile",
-            "average_confidence": round(avg_confidence, 2),
-            "critical_areas": severe_or_above,
-            "affected_areas": moderate_or_above,
-            "top_damage_area": top_damage_area["name"] if top_damage_area else None,
-            "top_damage_severity": round(top_damage_area["damage_severity"], 2) if top_damage_area else 0.0,
-            "model_trees": model_info.get("n_trees", 0),
-            "model_features": model_info.get("n_features", 0),
-        },
-        "areas": predictions,
-    }
+        severities = [p["damage_severity"] for p in predictions]
+        avg_severity = (sum(severities) / len(severities)) if severities else 0.0
+        max_severity = max(severities) if severities else 0.0
+        detected_total_area = sum(p["area"] for p in area_profiles) if area_profiles else total_area
+        detected_room_count = len(area_profiles) if area_profiles else room_count
+
+        class_counts = {"No Damage": 0, "Minor": 0, "Moderate": 0, "Severe": 0, "Catastrophic": 0}
+        for p in predictions:
+            if p["damage_class_name"] in class_counts:
+                class_counts[p["damage_class_name"]] += 1
+
+        confidences = [p["confidence"] for p in predictions if "confidence" in p]
+        avg_confidence = (sum(confidences) / len(confidences)) if confidences else 0.0
+        severe_or_above = class_counts["Severe"] + class_counts["Catastrophic"]
+        moderate_or_above = severe_or_above + class_counts["Moderate"]
+        top_damage_area = max(predictions, key=lambda p: p["damage_severity"]) if predictions else None
+
+        model_info = predictor.get_model_info()
+
+        return {
+            "status": "success",
+            "filename": filename,
+            "disaster_type": disaster_type,
+            "disaster_intensity": round(intensity, 2),
+            "summary": {
+                "total_area": round(detected_total_area, 2),
+                "room_count": detected_room_count,
+                "average_severity": round(avg_severity, 2),
+                "max_severity": round(max_severity, 2),
+                "class_counts": class_counts,
+                "building_risk": predictor._get_risk_level(avg_severity),
+                "areas_source": "real_model" if using_real_model_areas else "fallback_profile",
+                "average_confidence": round(avg_confidence, 2),
+                "critical_areas": severe_or_above,
+                "affected_areas": moderate_or_above,
+                "top_damage_area": top_damage_area["name"] if top_damage_area else None,
+                "top_damage_severity": round(top_damage_area["damage_severity"], 2) if top_damage_area else 0.0,
+                "model_trees": model_info.get("n_trees", 0),
+                "model_features": model_info.get("n_features", 0),
+            },
+            "areas": predictions,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Damage prediction failed: {str(e)}")
 
 @app.post("/pathfind")
 async def pathfind_evacuation(
@@ -764,6 +823,14 @@ async def pathfind_evacuation(
     
     output_obj = os.path.join(TARGET_DIR, f"{unique_id}_evacuated.glb")
     script_path = os.path.join(ROOT_DIR, "Blender", "blender_evacuate_path.py")
+
+    allowed_algorithms = {"astar", "qlearning"}
+    algorithm = (algorithm or "qlearning").lower()
+    if algorithm not in allowed_algorithms:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid algorithm '{algorithm}'. Allowed: {sorted(allowed_algorithms)}",
+        )
     
     try:
         cmd = [
@@ -781,11 +848,12 @@ async def pathfind_evacuation(
             algorithm
         ]
         
-        check_output(cmd)
-        
-        # Verify the file was created
-        if not os.path.exists(output_obj):
-            raise Exception("Blender script finished but evacuation path model was not created.")
+        run_blender_command(
+            cmd,
+            operation_name="Evacuation pathfinding",
+            output_path=output_obj,
+            min_output_bytes=1024,
+        )
 
         diagnostics = None
         meta_path = output_obj + ".pathmeta.json"
@@ -804,14 +872,10 @@ async def pathfind_evacuation(
             "source_model": "simulated" if use_simulated else "original",
             "path_diagnostics": diagnostics,
         }
-    except CalledProcessError as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Pathfinding failed: {str(e)}")
     except Exception as e:
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Pathfinding error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Pathfinding failed: {str(e)}")
 
 # Static mounts
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")

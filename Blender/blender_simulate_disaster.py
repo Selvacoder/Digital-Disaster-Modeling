@@ -442,9 +442,13 @@ def simulate_earthquake(params):
         band_width = max(0.7, xy_extent * random.uniform(0.06, 0.14))
         fault_data.append((direction, band_center, band_width))
 
+    structural_meshes = []
+
     for obj in meshes:
         if not ("wall" in obj.name.lower() or "room" in obj.name.lower() or "door" in obj.name.lower()):
             continue
+
+        structural_meshes.append(obj)
 
         world_center = get_object_center(obj)
         cxy = mathutils.Vector((world_center.x, world_center.y, 0.0))
@@ -463,16 +467,17 @@ def simulate_earthquake(params):
         if local_damage < 0.14:
             continue
 
-        rot_amp = 0.03 + 0.12 * local_damage
+        rot_amp = 0.01 + 0.04 * local_damage
         shift_amp = (0.02 + 0.12 * local_damage) * (diag / max(1.0, xy_extent + 0.001))
 
-        obj.rotation_euler.x += random.uniform(-rot_amp, rot_amp) * 0.35
-        obj.rotation_euler.y += random.uniform(-rot_amp, rot_amp) * 0.35
+        # Keep roll/pitch subtle so the building does not collapse to one side.
+        obj.rotation_euler.x += random.uniform(-rot_amp, rot_amp) * 0.08
+        obj.rotation_euler.y += random.uniform(-rot_amp, rot_amp) * 0.08
         obj.rotation_euler.z += random.uniform(-0.07, 0.07) * local_damage
         obj.location.x += random.uniform(-shift_amp, shift_amp)
         obj.location.y += random.uniform(-shift_amp, shift_amp)
 
-        sink = random.uniform(0.0, 0.08) * local_damage
+        sink = random.uniform(0.0, 0.04) * local_damage
         base_z = get_object_base_z(obj)
         max_sink = max(0.0, (base_z - min_v.z) - 0.02)
         obj.location.z = max(min_v.z, obj.location.z - min(sink, max_sink))
@@ -518,14 +523,22 @@ def simulate_earthquake(params):
         severe_objs = [o for o in meshes if ("wall" in o.name.lower() or "room" in o.name.lower())]
         random.shuffle(severe_objs)
         for obj in severe_objs[: max(3, int(len(severe_objs) * 0.12))]:
-            obj.rotation_euler.x += random.uniform(-0.28, 0.28)
-            obj.rotation_euler.y += random.uniform(-0.28, 0.28)
-            sink = random.uniform(0.08, 0.26)
+            # Avoid large roll/pitch in major damage stage; keep readable but stable geometry.
+            obj.rotation_euler.z += random.uniform(-0.08, 0.08)
+            sink = random.uniform(0.03, 0.12)
             base_z = get_object_base_z(obj)
             max_sink = max(0.0, (base_z - min_v.z) - 0.02)
             obj.location.z = max(min_v.z, obj.location.z - min(sink, max_sink))
             obj.data.materials.clear()
             obj.data.materials.append(cracked_mat)
+
+    # Final stabilization: clamp residual roll/pitch and keep structural meshes above floor.
+    for obj in structural_meshes:
+        obj.rotation_euler.x = max(-0.035, min(0.035, obj.rotation_euler.x))
+        obj.rotation_euler.y = max(-0.035, min(0.035, obj.rotation_euler.y))
+        base_z = get_object_base_z(obj)
+        if base_z < min_v.z:
+            obj.location.z += (min_v.z - base_z)
 
 
 def export_glb(output_path):
@@ -543,11 +556,10 @@ def export_glb(output_path):
             filepath=output_path,
             export_format='GLB',
             use_selection=False,
-            export_materials='EXPORT',
-            export_colors=True
+            export_materials='EXPORT'
         )
     except Exception as e:
-        print(f"Export failed: {e}")
+        raise RuntimeError(f"Export failed: {e}")
 
 
 def log(msg):

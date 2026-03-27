@@ -118,18 +118,24 @@ def main(argv):
     objs = bpy.data.objects
     objs.remove(objs["Cube"], do_unlink=True)
 
-    if len(argv) > 7:  # Note YOU need 8 arguments!
-        program_path = argv[5]
-        target = argv[6]
+    # Preferred invocation uses `--` to pass script args.
+    if "--" in argv:
+        script_args = argv[argv.index("--") + 1 :]
     else:
+        # Backward compatibility for legacy calls without `--`.
+        script_args = argv[5:]
+
+    if len(script_args) < 3:
         exit(0)
+
+    program_path = script_args[0]
+    target = script_args[1]
 
     """
     Instantiate
     Each argument after 7 will be a floorplan path
     """
-    for i in range(7, len(argv)):
-        base_path = argv[i]
+    for i, base_path in enumerate(script_args[2:], start=7):
         create_floorplan(base_path, program_path, i)
 
     # Join paths robustly

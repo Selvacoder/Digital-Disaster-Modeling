@@ -6,13 +6,19 @@ import sys
 if __name__ == "__main__":
     argv = sys.argv
 
-    input_path = argv[5]
+    if "--" in argv:
+        script_args = argv[argv.index("--") + 1 :]
+    else:
+        script_args = argv[5:]
+
+    if len(script_args) < 3:
+        raise SystemExit("Expected input_path, format, output_path")
+
+    input_path = script_args[0]
     bpy.ops.wm.open_mainfile(filepath=input_path)
 
-    format = argv[6]
-    output_path = argv[
-        7
-    ]  # strict argc==5 -> len=6 will be used as argument see Reformat_blender_to_obj.py
+    format = script_args[1]
+    output_path = script_args[2]
 
     if format == ".obj":
         # Ensure focus on all objects
@@ -38,8 +44,7 @@ if __name__ == "__main__":
             filepath=output_path,
             export_format='GLB' if format == '.glb' else 'GLTF_SEPARATE',
             use_selection=False,
-            export_materials='EXPORT',
-            export_colors=True
+            export_materials='EXPORT'
         )
     elif format == ".x3d":
         bpy.ops.export_scene.x3d(filepath=output_path)

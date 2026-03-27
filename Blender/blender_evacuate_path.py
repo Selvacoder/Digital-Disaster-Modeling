@@ -1155,10 +1155,9 @@ def export_glb(output_path):
             export_format='GLB',
             use_selection=False,
             export_materials='EXPORT',
-            export_colors=True,
         )
     except Exception as e:
-        print(f"Export failed: {e}")
+        raise RuntimeError(f"Export failed: {e}")
 
 
 # ---------------------------------------------------------------------------

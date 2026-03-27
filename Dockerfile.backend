@@ -19,6 +19,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxext6 \
     libxrender1 \
     libgomp1 \
+    python3-numpy \
+    python3-opencv \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
